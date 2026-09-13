@@ -56,8 +56,12 @@ def has_ffmpeg() -> bool:
 def build_opts(media_format: str, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(output_dir / "%(title)s [%(id)s].%(ext)s")
-    # Shared hardening (player clients, cookies, JS runtime) + ffmpeg path.
+    # Shared hardening (player clients, PO tokens, cookies, JS runtime)
+    # + ffmpeg path.
     base: dict = base_opts()
+    # Small pause before each download so bursts look less bot-like.
+    base["sleep_interval"] = 2
+    base["max_sleep_interval"] = 5
     ffmpeg_exe = _ffmpeg_exe()
     if ffmpeg_exe:
         # Full path to binary (imageio-ffmpeg names it differently

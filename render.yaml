@@ -2,8 +2,8 @@ services:
   - type: web
     name: yt-app-backend
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt && curl -fsSL -o bgutil-pot https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-linux-x86_64 && chmod +x bgutil-pot && curl -fsSL -o pot-plugin.zip https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip && mkdir -p yt_plugins && python -c "import zipfile; zipfile.ZipFile('pot-plugin.zip').extractall('yt_plugins')" && rm pot-plugin.zip
+    startCommand: bash start.sh
     envVars:
       - key: JWT_SECRET
         generateValue: true

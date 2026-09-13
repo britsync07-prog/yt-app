@@ -15,9 +15,27 @@ import tempfile
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+PLUGIN_DIR = BASE_DIR / "yt_plugins"
+# Sidecar token server (bgutil-pot). Render runs it via start.sh;
+# locally run bgutil-pot(.exe) server --port 4416 yourself, or skip it
+# (extraction still works, just without PO tokens).
+# NOTE: hostname "localhost" (not 127.0.0.1) - the server binds IPv6 [::].
+POT_SERVER_URL = os.environ.get("POT_SERVER_URL", "http://localhost:4416")
 
 _COOKIE_TMP: str | None = None
 _COOKIE_CHECKED = False
+_PLUGINS_DONE = False
+
+
+def pot_binary() -> str | None:
+    """Absolute path to the bgutil-pot sidecar binary, if shipped
+    next to the code (bgutil-pot.exe on Windows, bgutil-pot on Linux)."""
+    names = ("bgutil-pot.exe", "bgutil-pot") if os.name == "nt" else ("bgutil-pot", "bgutil-pot.exe")
+    for name in names:
+        p = BASE_DIR / name
+        if p.is_file():
+            return str(p)
+    return None
 
 
 def cookie_file() -> str | None:
@@ -42,14 +60,52 @@ def cookie_file() -> str | None:
     return None
 
 
+def _ensure_plugins() -> None:
+    """Register our yt_plugins dir. NOTE: this yt-dlp version reads
+    plugin dirs from a GLOBAL (yt_dlp.globals.plugin_dirs), not from
+    YoutubeDL params - passing plugin_dirs to YoutubeDL is silently
+    ignored, so this step is mandatory."""
+    global _PLUGINS_DONE
+    if _PLUGINS_DONE:
+        return
+    _PLUGINS_DONE = True
+    if not PLUGIN_DIR.is_dir():
+        return
+    try:
+        from yt_dlp.globals import plugin_dirs
+
+        current = list(plugin_dirs.value or [])
+        if "default" not in current:
+            current.append("default")
+        if str(PLUGIN_DIR) not in current:
+            current.append(str(PLUGIN_DIR))
+        plugin_dirs.value = current
+    except Exception:
+        pass
+
+
 def base_opts(extra: dict | None = None) -> dict:
     """Common yt-dlp options every module starts from."""
+    _ensure_plugins()
     opts: dict = {
         "quiet": True,
         "no_warnings": True,
         "js_runtimes": {"node": {}},
         # Try mobile API clients before web - they trip bot checks rarely.
-        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
+        # youtubepot-bgutilhttp feeds PO tokens from the sidecar server
+        # when it is running; youtubepot-bgutilcli uses the binary
+        # directly as fallback. Both are harmless when unavailable.
+        # NOTE: these must be TOP-LEVEL extractor_args keys,
+        # not nested under "youtube".
+        "extractor_args": {
+            "youtube": {"player_client": ["android", "ios", "web"]},
+            "youtubepot-bgutilhttp": {"base_url": POT_SERVER_URL},
+            **(
+                {"youtubepot-bgutilcli": {"cli_path": pot_binary()}}
+                if pot_binary()
+                else {}
+            ),
+        },
     }
     cf = cookie_file()
     if cf:

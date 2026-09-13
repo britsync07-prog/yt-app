@@ -1,6 +1,9 @@
 .env
 cookies.txt
 frontend/config.js
+bgutil-pot
+bgutil-pot.exe
+yt_plugins/
 __pycache__/
 downloads/
 *.zip
