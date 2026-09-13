@@ -31,6 +31,9 @@ def get_video_info(video_url: str) -> dict:
             info = ydl.extract_info(video_url, download=False)
     except Exception as e:
         if is_bot_check(e) and worker_cfg()[0]:
+            import logging
+
+            logging.getLogger("yt-app").info("video-info bot-checked, trying relay")
             try:
                 return worker_video_info(video_url)
             except Exception:

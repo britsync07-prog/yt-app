@@ -78,6 +78,9 @@ def get_playlist_videos(playlist_url: str) -> dict:
             info = None
     if not info:
         if last_error and is_bot_check(last_error) and worker_cfg()[0]:
+            import logging
+
+            logging.getLogger("yt-app").info("playlist bot-checked, trying relay")
             try:
                 return worker_playlist_videos(playlist_url)
             except Exception:

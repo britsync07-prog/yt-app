@@ -273,17 +273,23 @@ def worker_cfg() -> tuple[str | None, str | None]:
 def worker_get(path: str, params: dict, timeout: int = 45) -> dict:
     """GET a JSON route from the relay. Raises ValueError on any failure."""
     import json
+    import logging
     import urllib.parse
     import urllib.request
 
+    log = logging.getLogger("yt-app")
     base, key = worker_cfg()
     if not base:
         raise ValueError("relay not configured")
     qs = urllib.parse.urlencode({"key": key, **params})
-    req = urllib.request.Request(f"{base}{path}?{qs}", headers={"User-Agent": "yt-app"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.load(r)
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{base}{path}?{qs}", headers={"User-Agent": "yt-app"}),
+            timeout=timeout,
+        ) as r:
+            data = json.load(r)
+        log.info("relay %s ok", path)
+        return data
     except Exception as e:
         detail = ""
         try:
@@ -293,7 +299,9 @@ def worker_get(path: str, params: dict, timeout: int = 45) -> dict:
                 detail = json.load(e).get("detail", "")
         except Exception:
             pass
-        raise ValueError(detail or f"relay error: {e}")
+        # Never log the key (it travels in the query string).
+        log.warning("relay %s failed: %s", path, detail or type(e).__name__)
+        raise ValueError(detail or f"relay error: {type(e).__name__}")
 
 
 def worker_video_info(video_url: str) -> dict:
