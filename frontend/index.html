@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YT Downloader</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-badge">&#9654;</span>
+      <h1>YT Downloader</h1>
+    </div>
+    <div class="health" id="health" title="Server status">
+      <span class="dot" id="health-dot"></span>
+      <span id="health-text">Connecting…</span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" id="tab-single" data-tab="single">Single Video</button>
+    <button class="tab" id="tab-playlist" data-tab="playlist">Playlist</button>
+  </nav>
+
+  <main>
+    <div class="key-prompt hidden" id="key-prompt">
+      <p>This site needs its access key to continue — paste it once and you're in.</p>
+      <div class="url-row">
+        <input id="key-input" type="password" placeholder="Access key" autocomplete="off" />
+        <button id="key-save" class="btn primary">Continue</button>
+      </div>
+      <div class="error hidden" id="key-error"></div>
+    </div>
+    <!-- ============ SINGLE VIDEO ============ -->
+    <section id="panel-single" class="panel active">
+      <div class="url-row">
+        <input id="video-url" type="url" placeholder="Paste a YouTube video URL, e.g. https://www.youtube.com/watch?v=…" />
+        <button id="video-get" class="btn primary">Get Video</button>
+      </div>
+      <div class="error hidden" id="video-error"></div>
+
+      <div class="preview hidden" id="video-preview">
+        <img id="video-thumb" alt="Video thumbnail" />
+        <div class="preview-info">
+          <h2 id="video-title"></h2>
+          <p class="meta" id="video-meta"></p>
+          <div class="format-row">
+            <label><input type="radio" name="single-format" value="video" checked /> Video (mp4)</label>
+            <label><input type="radio" name="single-format" value="audio" /> Audio (mp3)</label>
+          </div>
+          <div class="btn-row">
+            <button id="video-download-video" class="btn primary">Download Video</button>
+            <button id="video-download-audio" class="btn">Download Audio</button>
+          </div>
+          <div class="dl-progress hidden" id="video-dl">
+            <div class="zip-status">
+              <strong id="video-dl-label">Downloading…</strong>
+              <span id="video-dl-pct">0%</span>
+            </div>
+            <div class="progress"><div class="progress-bar" id="video-dl-bar"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="loading hidden" id="video-loading"><span class="spinner"></span> Getting video info…</div>
+    </section>
+
+    <!-- ============ PLAYLIST ============ -->
+    <section id="panel-playlist" class="panel">
+      <div class="url-row">
+        <input id="playlist-url" type="url" placeholder="Paste a public playlist URL, e.g. https://www.youtube.com/playlist?list=…" />
+        <button id="playlist-get" class="btn primary">Get Videos</button>
+      </div>
+      <div class="error hidden" id="playlist-error"></div>
+      <div class="loading hidden" id="playlist-loading"><span class="spinner"></span> Getting videos…</div>
+
+      <div class="playlist-head hidden" id="playlist-head">
+        <div>
+          <h2 id="playlist-title"></h2>
+          <p class="meta" id="playlist-count"></p>
+        </div>
+      </div>
+
+      <div class="toolbar hidden" id="playlist-toolbar">
+        <label class="select-all"><input type="checkbox" id="select-all" /> Select all</label>
+        <span class="selected-count" id="selected-count">0 selected</span>
+        <div class="format-row">
+          <label><input type="radio" name="playlist-format" value="video" checked /> Video</label>
+          <label><input type="radio" name="playlist-format" value="audio" /> Audio</label>
+        </div>
+        <div class="btn-row">
+          <button id="playlist-download-selected" class="btn">Download selected</button>
+          <button id="playlist-download-zip" class="btn primary">Download as ZIP</button>
+        </div>
+      </div>
+      <p class="hint hidden" id="multi-hint">Tip: “Download as ZIP” packs everything into a single file.</p>
+
+      <div class="zip-panel hidden" id="zip-panel">
+        <div class="zip-status">
+          <strong id="zip-label">Packing your ZIP…</strong>
+          <span id="zip-count">0 / 0</span>
+        </div>
+        <div class="progress"><div class="progress-bar" id="zip-bar"></div></div>
+        <p class="meta" id="zip-current"></p>
+        <div class="error hidden" id="zip-error"></div>
+      </div>
+
+      <div class="grid" id="video-grid"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Paste a link, pick Video or Audio, download. Free, no sign-up.</p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

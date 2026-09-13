@@ -1,0 +1,5 @@
+.env
+frontend/config.js
+__pycache__/
+downloads/
+*.zip
