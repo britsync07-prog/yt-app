@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from auth import require_auth
 from auth import router as auth_router
+from debug import router as debug_router
 from downloader import router as downloader_router
 from health import router as health_router
 from playlist import router as playlist_router
@@ -39,6 +40,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(health_router)  # public (uptime checks)
+app.include_router(debug_router, dependencies=[Depends(require_auth)])
 app.include_router(playlist_router, dependencies=[Depends(require_auth)])
 app.include_router(videoinfo_router, dependencies=[Depends(require_auth)])
 app.include_router(downloader_router, dependencies=[Depends(require_auth)])
