@@ -16,11 +16,22 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = BASE_DIR / "yt_plugins"
+PLUGIN_ZIP_NAME = "bgutil-ytdlp-pot-provider-rs.zip"
+POT_VERSION = "v0.8.1"
+POT_RELEASE = (
+    "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs"
+    f"/releases/download/{POT_VERSION}"
+)
+POT_ASSETS = {
+    "linux": "bgutil-pot-linux-x86_64",
+    "win": "bgutil-pot-windows-x86_64.exe",
+}
 # Sidecar token server (bgutil-pot). Render runs it via start.sh;
 # locally run bgutil-pot(.exe) server --port 4416 yourself, or skip it
 # (extraction still works, just without PO tokens).
 # NOTE: hostname "localhost" (not 127.0.0.1) - the server binds IPv6 [::].
 POT_SERVER_URL = os.environ.get("POT_SERVER_URL", "http://localhost:4416")
+POT_PORT = 4416
 
 _COOKIE_TMP: str | None = None
 _COOKIE_CHECKED = False
@@ -36,6 +47,103 @@ def pot_binary() -> str | None:
         if p.is_file():
             return str(p)
     return None
+
+
+def _download(url: str, dest: Path, timeout: int = 300) -> bool:
+    """Fetch a URL to dest (atomic-ish via .part file). False on any error."""
+    import urllib.request
+
+    part = dest.with_suffix(dest.suffix + ".part")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "yt-app"})
+        with urllib.request.urlopen(req, timeout=timeout) as r, open(part, "wb") as f:
+            while True:
+                chunk = r.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+        part.replace(dest)
+        return True
+    except Exception:
+        try:
+            part.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def _sidecar_up() -> bool:
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(POT_SERVER_URL + "/ping", timeout=3) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def ensure_pot() -> None:
+    """Self-heal the PO-token stack at runtime (Render-safe).
+
+    - Fetches the plugin zip (~6KB) and the sidecar binary (~45MB, once)
+      when missing, so plain `pip install + uvicorn` deploys work with
+      zero dashboard/build changes.
+    - Starts the sidecar when its binary exists but nothing listens.
+    Best-effort: any failure just means "no PO tokens", never an error.
+    """
+    try:
+        PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        lock = PLUGIN_DIR / ".pot-fetch.lock"
+        try:
+            lock.touch(exist_ok=False)
+        except FileExistsError:
+            return  # another worker/process is already fetching
+        try:
+            if not (PLUGIN_DIR / PLUGIN_ZIP_NAME).is_file():
+                _download(f"{POT_RELEASE}/{PLUGIN_ZIP_NAME}", PLUGIN_DIR / PLUGIN_ZIP_NAME, timeout=60)
+            if pot_binary() is None:
+                asset = POT_ASSETS["win"] if os.name == "nt" else POT_ASSETS["linux"]
+                target = BASE_DIR / asset
+                # Canonical name so pot_binary() finds it without rename.
+                dest = BASE_DIR / ("bgutil-pot.exe" if os.name == "nt" else "bgutil-pot")
+                if _download(f"{POT_RELEASE}/{asset}", target):
+                    try:
+                        if not dest.exists():
+                            target.replace(dest)
+                    except OSError:
+                        pass
+                    if os.name != "nt":
+                        try:
+                            os.chmod(str(dest), 0o755)
+                        except OSError:
+                            pass
+            if os.environ.get("POT_AUTOSTART", "1") != "0":
+                binary = pot_binary()
+                if binary and not _sidecar_up():
+                    import subprocess
+
+                    subprocess.Popen(
+                        [binary, "server", "--port", str(POT_PORT)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+        finally:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
+def _ensure_pot_background() -> None:
+    import threading
+
+    threading.Thread(target=ensure_pot, daemon=True).start()
+
+
+_ensure_pot_background()
 
 
 def cookie_file() -> str | None:
