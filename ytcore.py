@@ -115,6 +115,21 @@ def base_opts(extra: dict | None = None) -> dict:
     return opts
 
 
+def pot_status() -> dict:
+    """Sidecar/plugin presence for /health. Short timeouts - never slow."""
+    plugin = PLUGIN_DIR.is_dir() and any(PLUGIN_DIR.iterdir())
+    server = False
+    try:
+        import json
+        import urllib.request
+
+        with urllib.request.urlopen(POT_SERVER_URL + "/ping", timeout=3) as r:
+            server = r.status == 200 and "server_uptime" in r.read().decode()
+    except Exception:
+        server = False
+    return {"plugin": bool(plugin), "server": server}
+
+
 def is_bot_check(e: Exception) -> bool:
     msg = str(e)
     return "Sign in to confirm you" in msg and "bot" in msg
