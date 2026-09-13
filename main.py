@@ -45,16 +45,22 @@ app.include_router(downloader_router, dependencies=[Depends(require_auth)])
 app.include_router(zipjobs_router, dependencies=[Depends(require_auth)])
 
 
-@app.get("/api")
-def api_root():
-    return {"message": "YT app API. GET /health for 200 OK."}
-
-
-# Serve the frontend (frontend/index.html) at / - must be mounted last
-# so API routes keep priority.
+# Local dev only: serve the page at / when a generated config exists
+# (run `node frontend/build-config.js` first). On Render there is no
+# config.js in the repo, so nothing is mounted and this stays a pure API
+# with a plain JSON message at /.
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
-if FRONTEND_DIR.exists():
+if (FRONTEND_DIR / "config.js").exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+else:
+
+    @app.get("/")
+    def root():
+        return {
+            "message": "YT app API. GET /health for 200 OK.",
+            "health": "/health",
+            "docs": "/docs",
+        }
 
 
 if __name__ == "__main__":
