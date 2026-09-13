@@ -23,6 +23,8 @@ import yt_dlp
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from ytcore import base_opts, friendly_error
+
 router = APIRouter()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,9 +56,8 @@ def has_ffmpeg() -> bool:
 def build_opts(media_format: str, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(output_dir / "%(title)s [%(id)s].%(ext)s")
-    # Use node (if installed) so YouTube returns the full format list
-    # (without a JS runtime some progressive mp4 formats are hidden).
-    base: dict = {"js_runtimes": {"node": {}}}
+    # Shared hardening (player clients, cookies, JS runtime) + ffmpeg path.
+    base: dict = base_opts()
     ffmpeg_exe = _ffmpeg_exe()
     if ffmpeg_exe:
         # Full path to binary (imageio-ffmpeg names it differently
@@ -129,7 +130,7 @@ def download_youtube(
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
     except Exception as e:
-        raise ValueError(f"Download failed: {e}") from e
+        raise friendly_error(e, "Download failed") from e
 
     after = set(output_dir.glob("*"))
     new_files = sorted(after - before, key=lambda p: p.stat().st_mtime)

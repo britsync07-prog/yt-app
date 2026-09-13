@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 
+from ytcore import base_opts, friendly_error
+
 router = APIRouter()
 
 
@@ -55,13 +57,12 @@ def get_playlist_videos(playlist_url: str) -> dict:
          "videos": [{"index": int, "id": str, "title": str,
                       "thumbnail": str, "url": str, "duration": int|None}]}
     """
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,  # fast: don't resolve each video
-        "skip_download": True,
-        "js_runtimes": {"node": {}},
-    }
+    ydl_opts = base_opts(
+        {
+            "extract_flat": True,  # fast: don't resolve each video
+            "skip_download": True,
+        }
+    )
     # A /watch?v=...&list=... link makes yt-dlp return just the one
     # video, so always prefer the canonical playlist URL when a
     # playlist id is present.
@@ -83,7 +84,7 @@ def get_playlist_videos(playlist_url: str) -> dict:
             last_error = e
             info = None
     if not info:
-        raise ValueError(f"Could not read playlist: {last_error}") from last_error
+        raise friendly_error(last_error or Exception("empty response"), "Could not read playlist")
 
     # If a single video URL was passed instead of a playlist, wrap it.
     if info.get("_type") != "playlist" and "entries" not in info:

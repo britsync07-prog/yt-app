@@ -7,6 +7,7 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 
 from playlist import _pick_thumbnail
+from ytcore import base_opts, friendly_error
 
 router = APIRouter()
 
@@ -18,18 +19,12 @@ def get_video_info(video_url: str) -> dict:
         {"id": str, "title": str, "thumbnail": str, "duration": int|None,
          "uploader": str|None, "url": str}
     """
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "js_runtimes": {"node": {}},
-    }
+    ydl_opts = base_opts({"skip_download": True, "noplaylist": True})
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
     except Exception as e:
-        raise ValueError(f"Could not read video: {e}") from e
+        raise friendly_error(e, "Could not read video") from e
 
     if not info:
         raise ValueError("Could not read video (empty response).")

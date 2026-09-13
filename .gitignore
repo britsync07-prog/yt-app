@@ -1,4 +1,5 @@
 .env
+cookies.txt
 frontend/config.js
 __pycache__/
 downloads/
