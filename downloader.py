@@ -118,6 +118,144 @@ def build_opts(media_format: str, output_dir: Path) -> dict:
     }
 
 
+def _safe_name(title: str, video_id: str) -> str:
+    import re
+
+    clean = re.sub(r'[\\/*?:"<>|]', "", title or "video").strip()[:80] or "video"
+    return f"{clean} [{video_id}]" if video_id else clean
+
+
+def _fetch_stream(url: str, dest: Path) -> Path:
+    """Download a (signed) media URL the way a browser would."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        },
+    )
+    with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
+        while True:
+            chunk = r.read(1024 * 256)
+            if not chunk:
+                break
+            f.write(chunk)
+    return dest
+
+
+def _run_ffmpeg(args: list[str]) -> None:
+    import subprocess
+
+    exe = _ffmpeg_exe()
+    if not exe:
+        raise ValueError("ffmpeg is required for this conversion.")
+    proc = subprocess.run([exe, "-y", *args], capture_output=True, timeout=900)
+    if proc.returncode != 0:
+        raise ValueError("Media conversion failed.")
+
+
+def _pick_streams(streams: list[dict], media_format: str) -> dict:
+    """Choose stream URLs. Returns {"kind": "progressive"/"mux"/"audio", ...}."""
+    audio = [s for s in streams if (s.get("mime") or "").startswith("audio/")]
+    video = [s for s in streams if (s.get("mime") or "").startswith("video/")]
+
+    def quality_key(s: dict) -> tuple:
+        q = s.get("quality") or ""
+        m = __import__("re").search(r"(\d+)", q)
+        return (int(m.group(1)) if m else 0, s.get("size") or 0)
+
+    progressive = [s for s in video if "mp4" in (s.get("mime") or "")]
+    if progressive:
+        progressive.sort(key=quality_key)
+
+    if media_format == "audio":
+        if audio:
+            # Prefer m4a (mp3 conversion is lossless-container, no re-encode pain).
+            audio.sort(key=lambda s: (s.get("mime") == "audio/mp4", s.get("size") or 0))
+            return {"kind": "audio", "audio": audio[-1]}
+        if progressive:
+            # No audio-only URL (common now) - rip audio from the
+            # progressive mp4 instead.
+            return {"kind": "audio_from_video", "video": progressive[-1]}
+        raise ValueError("No audio streams available.")
+    # Progressive first (single file, video+audio together).
+    progressive = [s for s in video if "mp4" in (s.get("mime") or "")]
+    if progressive:
+        progressive.sort(key=quality_key)
+        return {"kind": "progressive", "video": progressive[-1]}
+    mp4video = [s for s in video if "mp4" in (s.get("mime") or "")]
+    if mp4video and audio:
+        mp4video.sort(key=quality_key)
+        audio.sort(key=lambda s: s.get("size") or 0)
+        return {"kind": "mux", "video": mp4video[-1], "audio": audio[-1]}
+    if video and audio:
+        video.sort(key=quality_key)
+        audio.sort(key=lambda s: s.get("size") or 0)
+        return {"kind": "mux", "video": video[-1], "audio": audio[-1]}
+    raise ValueError("No playable streams available.")
+
+
+def download_via_worker_streams(
+    url: str, media_format: str = "video", output_dir: Path = DEFAULT_OUTPUT_DIR
+) -> Path:
+    """Fallback path: stream URLs from the relay, downloaded directly.
+
+    Used when yt-dlp itself is bot-checked. Raises ValueError otherwise.
+    """
+    from ytcore import worker_video_info
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    info = worker_video_info(url)
+    streams = info.get("streams") or []
+    if not streams:
+        raise ValueError("Relay returned no playable streams.")
+    pick = _pick_streams(streams, media_format)
+    name = _safe_name(info.get("title", ""), info.get("id", ""))
+
+    if pick["kind"] == "progressive":
+        return _fetch_stream(pick["video"]["url"], output_dir / f"{name}.mp4")
+    if pick["kind"] == "audio_from_video":
+        if not _ffmpeg_exe():
+            raise ValueError("Audio extraction needs ffmpeg.")
+        src = _fetch_stream(pick["video"]["url"], output_dir / f"{name}.mp4")
+        out = output_dir / f"{name}.mp3"
+        _run_ffmpeg(["-i", str(src), "-vn", "-b:a", "192k", str(out)])
+        try:
+            src.unlink()
+        except OSError:
+            pass
+        return out
+    if pick["kind"] == "audio":
+        src_ext = ".m4a" if "mp4" in (pick["audio"].get("mime") or "") else ".webm"
+        raw = _fetch_stream(pick["audio"]["url"], output_dir / f"{name}{src_ext}")
+        if _ffmpeg_exe():
+            out = output_dir / f"{name}.mp3"
+            _run_ffmpeg(["-i", str(raw), "-vn", "-b:a", "192k", str(out)])
+            try:
+                raw.unlink()
+            except OSError:
+                pass
+            return out
+        return raw
+    # mux: best video + best audio, merged to mp4
+    vpart = _fetch_stream(pick["video"]["url"], output_dir / f"{name}.vpart")
+    apart = _fetch_stream(pick["audio"]["url"], output_dir / f"{name}.apart")
+    out = output_dir / f"{name}.mp4"
+    _run_ffmpeg(["-i", str(vpart), "-i", str(apart), "-c", "copy", str(out)])
+    for p in (vpart, apart):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    return out
+
+
 def download_youtube(
     url: str, media_format: str = "video", output_dir: Path = DEFAULT_OUTPUT_DIR
 ) -> Path:
@@ -134,6 +272,16 @@ def download_youtube(
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
     except Exception as e:
+        from ytcore import is_bot_check, worker_cfg
+
+        if is_bot_check(e) and worker_cfg()[0]:
+            import logging
+
+            logging.getLogger("yt-app").info("download bot-checked, trying relay streams")
+            try:
+                return download_via_worker_streams(url, media_format, output_dir)
+            except Exception:
+                pass
         raise friendly_error(e, "Download failed") from e
 
     after = set(output_dir.glob("*"))

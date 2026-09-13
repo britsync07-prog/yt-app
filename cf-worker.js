@@ -129,6 +129,15 @@ async function videoInfo(id) {
     throw new Error(status.reason || `video not playable (${status.status})`);
   }
   const vd = data.videoDetails || {};
+  const sd = data.streamingData || {};
+  const streams = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
+    .filter((s) => s.url)
+    .map((s) => ({
+      url: s.url,
+      mime: (s.mimeType || '').split(';')[0],
+      quality: s.qualityLabel || s.quality || '',
+      size: s.contentLength ? +s.contentLength : null,
+    }));
   return {
     id: vd.videoId || id,
     title: vd.title || '',
@@ -136,6 +145,7 @@ async function videoInfo(id) {
     duration: vd.lengthSeconds ? +vd.lengthSeconds : null,
     thumbnail: bestThumb(vd.thumbnail && vd.thumbnail.thumbnails),
     url: `https://www.youtube.com/watch?v=${id}`,
+    streams,
   };
 }
 
