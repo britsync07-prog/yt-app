@@ -33,6 +33,8 @@ POT_ASSETS = {
 POT_SERVER_URL = os.environ.get("POT_SERVER_URL", "http://localhost:4416")
 POT_PORT = 4416
 
+PLAYER_CLIENTS = ["android", "ios", "tv", "mweb", "web_embedded", "web"]
+
 _COOKIE_TMP: str | None = None
 _COOKIE_CHECKED = False
 _PLUGINS_DONE = False
@@ -206,7 +208,7 @@ def base_opts(extra: dict | None = None) -> dict:
         # NOTE: these must be TOP-LEVEL extractor_args keys,
         # not nested under "youtube".
         "extractor_args": {
-            "youtube": {"player_client": ["android", "ios", "web"]},
+            "youtube": {"player_client": PLAYER_CLIENTS},
             "youtubepot-bgutilhttp": {"base_url": POT_SERVER_URL},
             **(
                 {"youtubepot-bgutilcli": {"cli_path": pot_binary()}}
