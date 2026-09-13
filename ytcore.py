@@ -245,6 +245,73 @@ def is_bot_check(e: Exception) -> bool:
     return "Sign in to confirm you" in msg and "bot" in msg
 
 
+def _playlist_id_from_url(url: str) -> str | None:
+    """Pull the `list=` playlist id out of any YouTube URL."""
+    try:
+        from urllib.parse import parse_qs, urlparse
+
+        ids = parse_qs(urlparse(url or "").query).get("list") or []
+        return ids[0] if ids else None
+    except Exception:
+        return None
+
+
+def _video_id_from_url(url: str) -> str | None:
+    import re
+
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})", url or "")
+    return m.group(1) if m else None
+
+
+def worker_cfg() -> tuple[str | None, str | None]:
+    """(base_url, key) for the Cloudflare relay, or (None, None)."""
+    base = os.environ.get("WORKER_URL", "").rstrip("/")
+    key = os.environ.get("WORKER_KEY", "")
+    return (base, key) if base and key else (None, None)
+
+
+def worker_get(path: str, params: dict, timeout: int = 45) -> dict:
+    """GET a JSON route from the relay. Raises ValueError on any failure."""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    base, key = worker_cfg()
+    if not base:
+        raise ValueError("relay not configured")
+    qs = urllib.parse.urlencode({"key": key, **params})
+    req = urllib.request.Request(f"{base}{path}?{qs}", headers={"User-Agent": "yt-app"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except Exception as e:
+        detail = ""
+        try:
+            import urllib.error
+
+            if isinstance(e, urllib.error.HTTPError):
+                detail = json.load(e).get("detail", "")
+        except Exception:
+            pass
+        raise ValueError(detail or f"relay error: {e}")
+
+
+def worker_video_info(video_url: str) -> dict:
+    """Same shape as videoinfo.get_video_info, via the relay."""
+    vid = _video_id_from_url(video_url)
+    if not vid:
+        raise ValueError("Could not read video id from URL.")
+    return worker_get("/video", {"id": vid})
+
+
+def worker_playlist_videos(playlist_url: str) -> dict:
+    """Same shape as playlist.get_playlist_videos, via the relay."""
+    pid = _playlist_id_from_url(playlist_url)
+    if not pid:
+        raise ValueError("Could not read playlist id from URL.")
+    return worker_get("/playlist", {"id": pid})
+
+
 def friendly_error(e: Exception, what: str) -> ValueError:
     """Map yt-dlp failures to messages safe for end users."""
     if is_bot_check(e):

@@ -7,7 +7,13 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 
 from playlist import _pick_thumbnail
-from ytcore import base_opts, friendly_error
+from ytcore import (
+    base_opts,
+    friendly_error,
+    is_bot_check,
+    worker_cfg,
+    worker_video_info,
+)
 
 router = APIRouter()
 
@@ -24,6 +30,11 @@ def get_video_info(video_url: str) -> dict:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
     except Exception as e:
+        if is_bot_check(e) and worker_cfg()[0]:
+            try:
+                return worker_video_info(video_url)
+            except Exception:
+                pass
         raise friendly_error(e, "Could not read video") from e
 
     if not info:

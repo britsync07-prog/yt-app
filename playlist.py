@@ -10,12 +10,18 @@ Usage as API (wired into main.py):
 """
 import json
 import sys
-from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 
-from ytcore import base_opts, friendly_error
+from ytcore import (
+    _playlist_id_from_url,
+    base_opts,
+    friendly_error,
+    is_bot_check,
+    worker_cfg,
+    worker_playlist_videos,
+)
 
 router = APIRouter()
 
@@ -34,19 +40,6 @@ def _pick_thumbnail(entry: dict) -> str | None:
         # final fallback: default YouTube thumbnail CDN
         return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
     return None
-
-
-def _playlist_id_from_url(url: str) -> str | None:
-    """Pull the `list=` playlist id out of any YouTube URL.
-
-    Handles both pure playlist links (/playlist?list=...) and
-    video-playing-in-playlist links (/watch?v=...&list=...).
-    """
-    try:
-        ids = parse_qs(urlparse(url).query).get("list") or []
-        return ids[0] if ids else None
-    except Exception:
-        return None
 
 
 def get_playlist_videos(playlist_url: str) -> dict:
@@ -84,6 +77,11 @@ def get_playlist_videos(playlist_url: str) -> dict:
             last_error = e
             info = None
     if not info:
+        if last_error and is_bot_check(last_error) and worker_cfg()[0]:
+            try:
+                return worker_playlist_videos(playlist_url)
+            except Exception:
+                pass
         raise friendly_error(last_error or Exception("empty response"), "Could not read playlist")
 
     # If a single video URL was passed instead of a playlist, wrap it.
