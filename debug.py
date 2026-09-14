@@ -71,13 +71,14 @@ def debug_pot_test(
             data=json.dumps({"content_binding": vid, "bypass_cache": False}).encode(),
         )
         with urllib.request.urlopen(req, timeout=60) as r:
-            body = json.loads(r.read().decode()[:2000])
+            body = json.loads(r.read().decode()[:4000])
             result["po_token"] = (body.get("poToken") or "")[:40] + "..."
             result["content_binding"] = body.get("contentBinding")
             result["visitor_data"] = (body.get("visitorData") or "")[:40] + "..."
             if full:
                 result["po_token_full"] = body.get("poToken")
                 result["visitor_data_full"] = body.get("visitorData")
+                result["raw_keys"] = list(body.keys())
     except Exception as e:
         result["generate_error"] = str(e)[:300]
     return result
