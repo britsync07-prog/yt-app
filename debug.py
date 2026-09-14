@@ -47,8 +47,11 @@ def debug_video_test(
 
 
 @router.get("/debug/pot-test")
-def debug_pot_test(_auth=Depends(require_auth)):
-    """Probe the PO-token sidecar server and return status + sample token."""
+def debug_pot_test(
+    vid: str = "09Urt8CSQAA",
+    _auth=Depends(require_auth),
+):
+    """Probe the PO-token sidecar server and return a sample token."""
     import json
     import urllib.request
     from ytcore import POT_SERVER_URL
@@ -61,14 +64,16 @@ def debug_pot_test(_auth=Depends(require_auth)):
         result["ping_error"] = str(e)
     try:
         req = urllib.request.Request(
-            POT_SERVER_URL + "/generate",
+            POT_SERVER_URL + "/get_pot",
             method="POST",
             headers={"Content-Type": "application/json"},
-            data=b'{}',
+            data=json.dumps({"content_binding": vid, "bypass_cache": False}).encode(),
         )
-        with urllib.request.urlopen(req, timeout=30) as r:
-            body = r.read().decode()[:1000]
-            result["generate"] = body
+        with urllib.request.urlopen(req, timeout=60) as r:
+            body = json.loads(r.read().decode()[:2000])
+            result["po_token"] = (body.get("poToken") or "")[:40] + "..."
+            result["content_binding"] = body.get("contentBinding")
+            result["visitor_data"] = (body.get("visitorData") or "")[:40] + "..."
     except Exception as e:
         result["generate_error"] = str(e)[:300]
     return result

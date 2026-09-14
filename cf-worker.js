@@ -147,10 +147,11 @@ function headerTitle(data) {
 /**
  * Fetch video info via player endpoint, trying each client until one works.
  * YouTube challenges certain clients per-IP, so fallback is critical.
+ * When the backend forwards a content-bound PO token (+visitor data), it is
+ * injected into every innertube request via serviceIntegrityDimensions.
  */
-async function videoInfo(id) {
+async function videoInfo(id, poToken, visitorData) {
   let lastErr = null;
-  // Try each client once; if all fail, retry ANDROID after 1.5s (transient YouTube flapping).
   const attempts = [...CLIENTS, CLIENTS[0]];
   for (let i = 0; i < attempts.length; i++) {
     const c = attempts[i];
@@ -159,10 +160,17 @@ async function videoInfo(id) {
       await new Promise((r) => setTimeout(r, 1500));
     }
     try {
-      const data = await innertube('player', { videoId: id, context: { client: c.context } }, c.ua);
+      const body = { videoId: id, context: { client: c.context } };
+      if (poToken) {
+        body.context.client.visitorData = visitorData || '';
+        body.serviceIntegrityDimensions = { poToken };
+      }
+      console.log(`[yt-app] videoInfo: ${c.name} poToken=${poToken ? 'yes' : 'no'}`);
+      const data = await innertube('player', body, c.ua);
       const status = data.playabilityStatus || {};
       if (status.status && status.status !== 'OK') {
         lastErr = `${c.name}: ${status.reason || status.status}`;
+        console.log(`[yt-app] videoInfo: ${c.name} -> ${lastErr}`);
         continue;
       }
       const vd = data.videoDetails || {};
@@ -265,7 +273,9 @@ export default {
       if (url.pathname === '/video') {
         const id = url.searchParams.get('id') || '';
         if (!id) return json({ detail: 'Missing ?id=' }, 400);
-        return json(await videoInfo(id));
+        const poToken = url.searchParams.get('po_token') || '';
+        const visitorData = url.searchParams.get('visitor_data') || '';
+        return json(await videoInfo(id, poToken, visitorData));
       }
       if (url.pathname === '/playlist') {
         const id = url.searchParams.get('id') || '';

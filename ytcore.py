@@ -10,9 +10,12 @@ Layers:
      then either set YT_COOKIES to the file CONTENTS (Render env var)
      or drop a cookies.txt next to .env (local dev, gitignored).
 """
+import logging
 import os
 import tempfile
 from pathlib import Path
+
+log = logging.getLogger("yt-app")
 
 BASE_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = BASE_DIR / "yt_plugins"
@@ -335,11 +338,61 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
 
 
 def worker_video_info(video_url: str) -> dict:
-    """Same shape as videoinfo.get_video_info, via the relay."""
+    """Same shape as videoinfo.get_video_info, via the relay.
+
+    Generates a content-bound PO token from the local sidecar (if up)
+    and forwards it + visitor data to the Worker so its Innertube calls
+    are not bot-checked, then includes the token in the player request.
+    """
     vid = _video_id_from_url(video_url)
     if not vid:
         raise ValueError("Could not read video id from URL.")
-    return worker_get("/video", {"id": vid})
+    params: dict = {"id": vid}
+    try:
+        pot = get_pot(vid)
+        if pot and pot.get("poToken"):
+            params["po_token"] = pot["poToken"]
+        if pot and pot.get("visitorData"):
+            params["visitor_data"] = pot["visitorData"]
+    except Exception as e:
+        log.warning("worker_video_info: get_pot skipped (%s)", e)
+    return worker_get("/video", params)
+
+
+def get_pot(video_id: str, timeout: int = 45) -> dict | None:
+    """Generate a content-bound PO token via the local bgutil-pot sidecar.
+
+    Returns {"poToken", "visitorData", "expiresAt", ...} or None on any
+    failure. content_binding = video id makes the token valid for the
+    exact player request the Worker will make.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        if not _sidecar_up():
+            log.warning("get_pot: sidecar not up, skipping")
+            return None
+        req = urllib.request.Request(
+            POT_SERVER_URL + "/get_pot",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(
+                {"content_binding": video_id, "bypass_cache": False}
+            ).encode(),
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = json.loads(r.read().decode())
+        if not body.get("poToken"):
+            log.warning("get_pot: empty response %s", str(body)[:120])
+            return None
+        return body
+    except urllib.error.HTTPError as e:
+        log.warning("get_pot: HTTP %s %s", e.code, e.read(200).decode(errors="replace"))
+    except Exception as e:
+        log.warning("get_pot: error %s", e)
+    return None
 
 
 def worker_playlist_videos(playlist_url: str) -> dict:
