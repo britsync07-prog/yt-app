@@ -397,7 +397,7 @@ def worker_download(
     # WHOLE call (new invocation -> new egress IP) with a FRESH token each
     # attempt until one lands on a colo that YouTube accepts. Cached tokens
     # are single-use (YouTube burns them), so always bypass the sidecar cache.
-    attempts = 4
+    attempts = 8
     for attempt in range(1, attempts + 1):
         params: dict = {"id": vid, "format": media_format}
         try:
@@ -460,7 +460,7 @@ def worker_download(
             log.error("worker_download: HTTP %s %s", e.code, detail)
             print(f"[yt-app] worker_download: HTTP {e.code} {detail}", flush=True)
             if e.code in (502, 403, 429) and attempt < attempts:
-                backoff = 3 + attempt * 2
+                backoff = 5 + attempt * 5
                 log.info("worker_download: retrying in %ds... (ego may rotate)", backoff)
                 print(
                     f"[yt-app] worker_download: retry in {backoff}s (attempt {attempt}/{attempts})",
