@@ -379,6 +379,7 @@ def worker_download(
     right extension and name (Content-Disposition carries the real title).
     """
     import json
+    import time
     import urllib.error
     import urllib.parse
     import urllib.request
@@ -389,77 +390,106 @@ def worker_download(
     relay_base, relay_key = worker_cfg()
     if not relay_base:
         raise ValueError("Relay not configured.")
-    # Has to go to /download synchronously with the POT, so we build the
-    # request ourselves instead of reusing worker_get (which parses JSON).
-    params: dict = {"id": vid, "format": media_format}
-    try:
-        pot = get_pot(vid)
-        if pot and pot.get("poToken"):
-            params["po_token"] = pot["poToken"]
-        if pot and pot.get("visitorData"):
-            params["visitor_data"] = pot["visitorData"]
-    except Exception as e:
-        log.warning("worker_download: get_pot skipped (%s)", e)
 
-    url = f"{relay_base}/download?key={relay_key}&{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0 Safari/537.36"
-            )
-        },
-    )
-    log.info("worker_download: format=%s vid=%s", media_format, vid)
-    print(f"[yt-app] worker_download: /download format={media_format} vid={vid}", flush=True)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            ctype = r.headers.get("Content-Type") or "application/octet-stream"
-            disp = r.headers.get("Content-Disposition") or ""
-            filename = None
-            m = __import__("re").search(r'filename="?([^";]+)"?', disp)
-            if m:
-                filename = m.group(1).strip()
-            dest = Path(dest)
-            with open(dest, "wb") as f:
-                while True:
-                    chunk = r.read(1024 * 256)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            log.info("worker_download: OK ctype=%s bytes=%s", ctype, dest.stat().st_size)
-            print(
-                f"[yt-app] worker_download: OK ctype={ctype} bytes={dest.stat().st_size}",
-                flush=True,
-            )
-            return ctype, filename
-    except urllib.error.HTTPError as e:
-        detail = ""
+    # Cloudflare resolves each Worker invocation to a different colo/egress
+    # IP, and YouTube bot-checks some of them even with a valid PO token.
+    # Because the token alone doesn't pick the egress IP, we must retry the
+    # WHOLE call (new invocation -> new egress IP) with a FRESH token each
+    # attempt until one lands on a colo that YouTube accepts. Cached tokens
+    # are single-use (YouTube burns them), so always bypass the sidecar cache.
+    attempts = 4
+    for attempt in range(1, attempts + 1):
+        params: dict = {"id": vid, "format": media_format}
         try:
-            body = e.read().decode("utf-8", errors="replace")
+            pot = get_pot(vid, bypass_cache=True)
+            if pot and pot.get("poToken"):
+                params["po_token"] = pot["poToken"]
+            if pot and pot.get("visitorData"):
+                params["visitor_data"] = pot["visitorData"]
+        except Exception as e:
+            log.warning("worker_download: get_pot skipped (%s)", e)
+
+        url = f"{relay_base}/download?key={relay_key}&{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0 Safari/537.36"
+                )
+            },
+        )
+        log.info("worker_download: attempt=%d format=%s vid=%s", attempt, media_format, vid)
+        print(
+            f"[yt-app] worker_download: /download attempt={attempt} "
+            f"format={media_format} vid={vid}",
+            flush=True,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                ctype = r.headers.get("Content-Type") or "application/octet-stream"
+                disp = r.headers.get("Content-Disposition") or ""
+                filename = None
+                m = __import__("re").search(r'filename="?([^";]+)"?', disp)
+                if m:
+                    filename = m.group(1).strip()
+                dest = Path(dest)
+                with open(dest, "wb") as f:
+                    while True:
+                        chunk = r.read(1024 * 256)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                log.info("worker_download: OK ctype=%s bytes=%s", ctype, dest.stat().st_size)
+                print(
+                    f"[yt-app] worker_download: OK ctype={ctype} bytes={dest.stat().st_size}",
+                    flush=True,
+                )
+                return ctype, filename
+        except urllib.error.HTTPError as e:
+            detail = ""
             try:
-                detail = json.loads(body).get("detail", "")
+                body = e.read().decode("utf-8", errors="replace")
+                try:
+                    detail = json.loads(body).get("detail", "")
+                except Exception:
+                    detail = body[:300]
             except Exception:
-                detail = body[:300]
-        except Exception:
-            pass
-        log.error("worker_download: HTTP %s %s", e.code, detail)
-        print(f"[yt-app] worker_download: HTTP {e.code} {detail}", flush=True)
-        raise ValueError(detail or f"relay download failed (HTTP {e.code})") from e
-    except Exception as e:
-        log.error("worker_download: %s", e)
-        print(f"[yt-app] worker_download: {type(e).__name__}: {e}", flush=True)
-        raise
+                pass
+            log.error("worker_download: HTTP %s %s", e.code, detail)
+            print(f"[yt-app] worker_download: HTTP {e.code} {detail}", flush=True)
+            if e.code in (502, 403, 429) and attempt < attempts:
+                backoff = 3 + attempt * 2
+                log.info("worker_download: retrying in %ds... (ego may rotate)", backoff)
+                print(
+                    f"[yt-app] worker_download: retry in {backoff}s (attempt {attempt}/{attempts})",
+                    flush=True,
+                )
+                time.sleep(backoff)
+                continue
+            raise ValueError(detail or f"relay download failed (HTTP {e.code})") from e
+        except Exception as e:
+            log.error("worker_download: %s", e)
+            print(f"[yt-app] worker_download: {type(e).__name__}: {e}", flush=True)
+            if attempt < attempts:
+                backoff = 3 + attempt * 2
+                log.info("worker_download: retrying in %ds... (ego may rotate)", backoff)
+                time.sleep(backoff)
+                continue
+            raise
 
 
-def get_pot(video_id: str, timeout: int = 45) -> dict | None:
+def get_pot(video_id: str, timeout: int = 45, bypass_cache: bool = True) -> dict | None:
     """Generate a content-bound PO token via the local bgutil-pot sidecar.
 
     Returns {"poToken", "visitorData", "expiresAt", ...} or None on any
     failure. content_binding = video id makes the token valid for the
     exact player request the Worker will make.
+
+    bypass_cache=True forces a NEW token every call. PO tokens are invalidated
+    by YouTube after use, so a cached token goes stale fast - for media
+    downloads we always want a fresh one.
     """
     import json
     import urllib.error
@@ -474,7 +504,7 @@ def get_pot(video_id: str, timeout: int = 45) -> dict | None:
             method="POST",
             headers={"Content-Type": "application/json"},
             data=json.dumps(
-                {"content_binding": video_id, "bypass_cache": False}
+                {"content_binding": video_id, "bypass_cache": bypass_cache}
             ).encode(),
         )
         with urllib.request.urlopen(req, timeout=timeout) as r:
