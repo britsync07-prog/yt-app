@@ -54,16 +54,6 @@ const CLIENTS = [
     },
     ua: 'com.google.ios.youtube/21.26.3 (iPhone14,3; U; CPU iOS 17_0 like Mac OS X)',
   },
-  {
-    name: 'TV',
-    context: {
-      clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-      clientVersion: '2.0',
-      hl: 'en',
-      gl: 'US',
-    },
-    ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/21.lts.4.30201',
-  },
 ];
 
 const CORS = {
@@ -150,7 +140,14 @@ function headerTitle(data) {
  */
 async function videoInfo(id) {
   let lastErr = null;
-  for (const c of CLIENTS) {
+  // Try each client once; if all fail, retry ANDROID after 1.5s (transient YouTube flapping).
+  const attempts = [...CLIENTS, CLIENTS[0]];
+  for (let i = 0; i < attempts.length; i++) {
+    const c = attempts[i];
+    if (i === CLIENTS.length) {
+      // Second pass on ANDROID — brief pause to absorb transient challenge.
+      await new Promise((r) => setTimeout(r, 1500));
+    }
     try {
       const data = await innertube('player', { videoId: id, context: { client: c.context } }, c.ua);
       const status = data.playabilityStatus || {};
@@ -181,7 +178,7 @@ async function videoInfo(id) {
       lastErr = `${c.name}: ${e.message || e}`;
     }
   }
-  throw new Error(`All player clients failed: ${lastErr}`);
+  throw new Error(`All player clients failed (${attempts.length} attempts): ${lastErr}`);
 }
 
 function parsePlaylistPage(data, first) {
