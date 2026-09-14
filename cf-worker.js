@@ -15,6 +15,8 @@
  * Routes (all require ?key=<WORKER_KEY>):
  *   GET /health
  *   GET /video?id=<youtubeId>       -> {id,title,uploader,duration,thumbnail,url,streams[]}
+ *   GET /download?id=<youtubeId>&format=audio|video   -> media bytes (mints + fetches in one invocation, same egress IP => avoids googlevideo IP-lock 403)
+ *   GET /stream?url=<encoded>       -> relay bytes for an already-minted googlevideo URL
  *   GET /playlist?id=<playlistId>   -> {playlist_title,count,videos[]}
  */
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
@@ -199,6 +201,40 @@ async function videoInfo(id, poToken, visitorData) {
   throw new Error(`All player clients failed (${attempts.length} attempts): ${lastErr}`);
 }
 
+/**
+ * Pick the best stream for a requested format.
+ * - 'audio': prefer audio-only adaptive stream (largest bytes = best bitrate);
+ *            fall back to a progressive mp4 (audio track usable by backend).
+ * - 'video': prefer highest-quality progressive mp4, then largest non-audio.
+ */
+function pickStream(streams, format) {
+  if (!streams || !streams.length) return null;
+  const isMp4 = (s) => /video\/mp4|; codecs="avc/.test(s.mime || '');
+  const isMp4Audio = (s) => (s.mime || '').startsWith('audio/mp4');
+  const qualityP = (s) => {
+    const m = /(\d+)p/.exec(s.quality || '');
+    return m ? +m[1] : 0;
+  };
+  if (format === 'audio') {
+    const auds = streams
+      .filter((s) => (s.mime || '').startsWith('audio/'))
+      .sort((a, b) => (b.size || 0) - (a.size || 0));
+    if (auds.length) return auds[0];
+    // No audio-only stream -> fall back to lowest-bitrate progressive mp4.
+    const prog = streams.filter(isMp4).sort((a, b) => (a.size || 0) - (b.size || 0));
+    if (prog.length) return prog[0];
+    return null;
+  }
+  const prog = streams
+    .filter((s) => isMp4(s) || /video\/(mp4|webm)/.test(s.mime || ''))
+    .sort((a, b) => qualityP(b) - qualityP(a) || (b.size || 0) - (a.size || 0));
+  if (prog.length) return prog[0];
+  const any = streams
+    .filter((s) => !(s.mime || '').startsWith('audio/'))
+    .sort((a, b) => qualityP(b) - qualityP(a) || (b.size || 0) - (a.size || 0));
+  return any[0] || (isMp4Audio(streams[0]) ? streams[0] : null);
+}
+
 function parsePlaylistPage(data, first) {
   let items;
   let title = '';
@@ -304,6 +340,52 @@ export default {
           headers: {
             'Content-Type': mediaRes.headers.get('Content-Type') || 'application/octet-stream',
             'Content-Length': mediaRes.headers.get('Content-Length') || '',
+            ...CORS,
+          },
+        });
+      }
+      if (url.pathname === '/download') {
+        // ONE combined invocation: mint the playable stream list AND fetch the
+        // chosen media bytes from the SAME Cloudflare egress IP. googlevideo
+        // stream URLs are signed to the extracting IP, so a separate /stream
+        // request (different colo/IP) gets 403. Doing both here sidesteps that.
+        const id = url.searchParams.get('id') || '';
+        const format = url.searchParams.get('format') || 'video';
+        if (!id) return json({ detail: 'Missing ?id=' }, 400);
+        const poToken = url.searchParams.get('po_token') || '';
+        const visitorData = url.searchParams.get('visitor_data') || '';
+        console.log(`[yt-app] /download id=${id} format=${format} po=${poToken ? 'yes' : 'no'}`);
+        const info = await videoInfo(id, poToken, visitorData);
+        const picked = pickStream(info.streams || [], format);
+        if (!picked) {
+          return json({ detail: `No playable stream for format=${format}` }, 502);
+        }
+        const mediaRes = await fetch(picked.url, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+            Referer: 'https://www.youtube.com/',
+            ...(request.headers.get('Range')
+              ? { Range: request.headers.get('Range') }
+              : {}),
+          },
+        });
+        if (!mediaRes.ok && !mediaRes.body) {
+          return json({ detail: `media fetch failed: ${mediaRes.status} (${picked.mime})` }, 502);
+        }
+        const safeTitle = (info.title || 'video').replace(/[^\w\- ]+/g, '').trim() || 'video';
+        const ext = format === 'audio'
+          ? (picked.mime || '').startsWith('audio/mp4') ? 'm4a' : (picked.mime || '').includes('webm') ? 'webm' : 'mp4'
+          : (picked.mime || '').includes('webm') ? 'webm' : 'mp4';
+        return new Response(mediaRes.body, {
+          status: mediaRes.status,
+          headers: {
+            'Content-Type': mediaRes.headers.get('Content-Type') || 'application/octet-stream',
+            'Content-Length': mediaRes.headers.get('Content-Length') || '',
+            'Content-Disposition': format === 'audio'
+              ? `attachment; filename="${safeTitle}.${ext}"`
+              : `attachment; filename="${safeTitle}.${ext}"`,
+            'Accept-Ranges': 'bytes',
             ...CORS,
           },
         });

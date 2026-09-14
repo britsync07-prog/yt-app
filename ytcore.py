@@ -359,6 +359,96 @@ def worker_video_info(video_url: str) -> dict:
     return worker_get("/video", params)
 
 
+def worker_download(
+    video_url: str,
+    media_format: str,
+    dest: str | Path,
+    timeout: int = 600,
+) -> str:
+    """Download a video's media bytes through the Worker's combined route.
+
+    googlevideo stream URLs are signed to the IP that extracted them. A
+    Worker /video call mints URLs bound to whichever Cloudflare colo handled
+    that request, so a *separate* subsequent request cannot fetch them (403).
+    The Worker's /download route therefore mints AND fetches the chosen
+    stream in the SAME invocation (same egress IP) and relays the raw bytes
+    back. This function generates a content-bound PO token locally, sends it
+    along, and writes the returned media to `dest`.
+
+    Returns the Content-Type reported by the Worker so the caller can decide
+    whether extraction/conversion is needed.
+    """
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    vid = _video_id_from_url(video_url)
+    if not vid:
+        raise ValueError("Could not read video id from URL.")
+    relay_base, relay_key = worker_cfg()
+    if not relay_base:
+        raise ValueError("Relay not configured.")
+    # Has to go to /download synchronously with the POT, so we build the
+    # request ourselves instead of reusing worker_get (which parses JSON).
+    params: dict = {"id": vid, "format": media_format}
+    try:
+        pot = get_pot(vid)
+        if pot and pot.get("poToken"):
+            params["po_token"] = pot["poToken"]
+        if pot and pot.get("visitorData"):
+            params["visitor_data"] = pot["visitorData"]
+    except Exception as e:
+        log.warning("worker_download: get_pot skipped (%s)", e)
+
+    url = f"{relay_base}/download?key={relay_key}&{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        },
+    )
+    log.info("worker_download: format=%s vid=%s", media_format, vid)
+    print(f"[yt-app] worker_download: /download format={media_format} vid={vid}", flush=True)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            ctype = r.headers.get("Content-Type") or "application/octet-stream"
+            dest = Path(dest)
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = r.read(1024 * 256)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            log.info("worker_download: OK ctype=%s bytes=%s", ctype, dest.stat().st_size)
+            print(
+                f"[yt-app] worker_download: OK ctype={ctype} bytes={dest.stat().st_size}",
+                flush=True,
+            )
+            return ctype
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+            try:
+                detail = json.loads(body).get("detail", "")
+            except Exception:
+                detail = body[:300]
+        except Exception:
+            pass
+        log.error("worker_download: HTTP %s %s", e.code, detail)
+        print(f"[yt-app] worker_download: HTTP {e.code} {detail}", flush=True)
+        raise ValueError(detail or f"relay download failed (HTTP {e.code})") from e
+    except Exception as e:
+        log.error("worker_download: %s", e)
+        print(f"[yt-app] worker_download: {type(e).__name__}: {e}", flush=True)
+        raise
+
+
 def get_pot(video_id: str, timeout: int = 45) -> dict | None:
     """Generate a content-bound PO token via the local bgutil-pot sidecar.
 

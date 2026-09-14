@@ -125,45 +125,6 @@ def _safe_name(title: str, video_id: str) -> str:
     return f"{clean} [{video_id}]" if video_id else clean
 
 
-def _fetch_stream(url: str, dest: Path) -> Path:
-    """Download a (signed) media URL the way a browser would.
-
-    When a relay is configured, stream URLs come back IP-locked to the
-    Cloudflare worker, so the actual bytes must be proxied through its
-    /stream route (only it can fetch googlevideo from the bound IP).
-    """
-    import urllib.request
-
-    from ytcore import worker_cfg
-
-    relay_base, relay_key = worker_cfg()
-    if relay_base and url.startswith("http"):
-        import urllib.parse
-
-        proxy_url = (
-            f"{relay_base}/stream?key={relay_key}&url={urllib.parse.quote(url, safe='')}"
-        )
-        url = proxy_url
-
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0 Safari/537.36"
-            )
-        },
-    )
-    with urllib.request.urlopen(req, timeout=600) as r, open(dest, "wb") as f:
-        while True:
-            chunk = r.read(1024 * 256)
-            if not chunk:
-                break
-            f.write(chunk)
-    return dest
-
-
 def _run_ffmpeg(args: list[str]) -> None:
     import subprocess
 
@@ -175,100 +136,53 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise ValueError("Media conversion failed.")
 
 
-def _pick_streams(streams: list[dict], media_format: str) -> dict:
-    """Choose stream URLs. Returns {"kind": "progressive"/"mux"/"audio", ...}."""
-    audio = [s for s in streams if (s.get("mime") or "").startswith("audio/")]
-    video = [s for s in streams if (s.get("mime") or "").startswith("video/")]
-
-    def quality_key(s: dict) -> tuple:
-        q = s.get("quality") or ""
-        m = __import__("re").search(r"(\d+)", q)
-        return (int(m.group(1)) if m else 0, s.get("size") or 0)
-
-    progressive = [s for s in video if "mp4" in (s.get("mime") or "")]
-    if progressive:
-        progressive.sort(key=quality_key)
-
-    if media_format == "audio":
-        if audio:
-            # Prefer m4a (mp3 conversion is lossless-container, no re-encode pain).
-            audio.sort(key=lambda s: (s.get("mime") == "audio/mp4", s.get("size") or 0))
-            return {"kind": "audio", "audio": audio[-1]}
-        if progressive:
-            # No audio-only URL (common now) - rip audio from the
-            # progressive mp4 instead.
-            return {"kind": "audio_from_video", "video": progressive[-1]}
-        raise ValueError("No audio streams available.")
-    # Progressive first (single file, video+audio together).
-    progressive = [s for s in video if "mp4" in (s.get("mime") or "")]
-    if progressive:
-        progressive.sort(key=quality_key)
-        return {"kind": "progressive", "video": progressive[-1]}
-    mp4video = [s for s in video if "mp4" in (s.get("mime") or "")]
-    if mp4video and audio:
-        mp4video.sort(key=quality_key)
-        audio.sort(key=lambda s: s.get("size") or 0)
-        return {"kind": "mux", "video": mp4video[-1], "audio": audio[-1]}
-    if video and audio:
-        video.sort(key=quality_key)
-        audio.sort(key=lambda s: s.get("size") or 0)
-        return {"kind": "mux", "video": video[-1], "audio": audio[-1]}
-    raise ValueError("No playable streams available.")
-
-
 def download_via_worker_streams(
     url: str, media_format: str = "video", output_dir: Path = DEFAULT_OUTPUT_DIR
 ) -> Path:
-    """Fallback path: stream URLs from the relay, downloaded directly.
+    """Fallback path: media bytes fetched through the Worker.
 
-    Used when yt-dlp itself is bot-checked. Raises ValueError otherwise.
+    Used when yt-dlp itself is bot-checked. googlevideo stream URLs are
+    IP-locked to the Cloudflare colo that minted them, so the Worker must
+    mint AND fetch the stream in one invocation. Its /download route does
+    exactly that; the bytes stream back and we optionally convert with
+    ffmpeg (audio-only stream -> mp3, progressive-mp4 fallback -> mp3).
     """
-    from ytcore import worker_video_info
+    from ytcore import worker_download, worker_video_info
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     info = worker_video_info(url)
-    streams = info.get("streams") or []
-    if not streams:
-        raise ValueError("Relay returned no playable streams.")
-    pick = _pick_streams(streams, media_format)
     name = _safe_name(info.get("title", ""), info.get("id", ""))
 
-    if pick["kind"] == "progressive":
-        return _fetch_stream(pick["video"]["url"], output_dir / f"{name}.mp4")
-    if pick["kind"] == "audio_from_video":
+    if media_format == "video":
+        dest = output_dir / f"{name}.mp4"
+        worker_download(url, "video", dest)
+        return dest
+
+    # audio: let the Worker fetch bytes, then decide conversion by mime.
+    raw = output_dir / f"{name}.raw"
+    ctype = worker_download(url, "audio", raw)
+    if ctype.startswith("video/"):
+        # No audio-only stream: worker fell back to a progressive mp4.
         if not _ffmpeg_exe():
-            raise ValueError("Audio extraction needs ffmpeg.")
-        src = _fetch_stream(pick["video"]["url"], output_dir / f"{name}.mp4")
+            raw.unlink(missing_ok=True)
+            raise ValueError(
+                "Audio is only available inside the video stream and "
+                "ffmpeg is not installed to extract it."
+            )
         out = output_dir / f"{name}.mp3"
-        _run_ffmpeg(["-i", str(src), "-vn", "-b:a", "192k", str(out)])
-        try:
-            src.unlink()
-        except OSError:
-            pass
+        _run_ffmpeg(["-i", str(raw), "-vn", "-b:a", "192k", str(out)])
+        raw.unlink(missing_ok=True)
         return out
-    if pick["kind"] == "audio":
-        src_ext = ".m4a" if "mp4" in (pick["audio"].get("mime") or "") else ".webm"
-        raw = _fetch_stream(pick["audio"]["url"], output_dir / f"{name}{src_ext}")
-        if _ffmpeg_exe():
-            out = output_dir / f"{name}.mp3"
-            _run_ffmpeg(["-i", str(raw), "-vn", "-b:a", "192k", str(out)])
-            try:
-                raw.unlink()
-            except OSError:
-                pass
-            return out
-        return raw
-    # mux: best video + best audio, merged to mp4
-    vpart = _fetch_stream(pick["video"]["url"], output_dir / f"{name}.vpart")
-    apart = _fetch_stream(pick["audio"]["url"], output_dir / f"{name}.apart")
-    out = output_dir / f"{name}.mp4"
-    _run_ffmpeg(["-i", str(vpart), "-i", str(apart), "-c", "copy", str(out)])
-    for p in (vpart, apart):
-        try:
-            p.unlink()
-        except OSError:
-            pass
+    # True audio-only stream (m4a/webm/opus). Convert to mp3 if ffmpeg exists.
+    ext = ".mp4" if "mp4" in ctype else ".m4a"
+    src = output_dir / f"{name}{ext}"
+    raw.replace(src)
+    if not _ffmpeg_exe():
+        return src
+    out = output_dir / f"{name}.mp3"
+    _run_ffmpeg(["-i", str(src), "-vn", "-b:a", "192k", str(out)])
+    src.unlink(missing_ok=True)
     return out
 
 
