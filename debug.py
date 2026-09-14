@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends
 
 from auth import require_auth
-from ytcore import worker_cfg, worker_get
+from ytcore import worker_cfg, worker_get, worker_video_info
 
 router = APIRouter()
 
@@ -17,3 +17,30 @@ def debug_relay(_auth=Depends(require_auth)):
         return {"configured": True, "reachable": True, "worker": data}
     except Exception as e:
         return {"configured": True, "reachable": False, "error": str(e)}
+
+
+@router.get("/debug/video-test")
+def debug_video_test(
+    url: str = "https://www.youtube.com/watch?v=09Urt8CSQAA",
+    _auth=Depends(require_auth),
+):
+    """Call worker_video_info directly and return the raw result or error."""
+    import logging
+    import traceback
+
+    log = logging.getLogger("yt-app")
+    base, key = worker_cfg()
+    result = {"relay_configured": bool(base), "relay_url": base}
+    try:
+        info = worker_video_info(url)
+        result["status"] = "ok"
+        result["title"] = info.get("title")
+        result["streams"] = len(info.get("streams") or [])
+        result["duration"] = info.get("duration")
+        log.info("debug/video-test OK title=%s", info.get("title"))
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+        result["traceback"] = traceback.format_exc()
+        log.error("debug/video-test FAILED: %s", e)
+    return result
