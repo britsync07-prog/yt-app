@@ -1,6 +1,16 @@
 """Main FastAPI server. Local: port 4444. Render: uses the $PORT env var."""
+import logging
 import os
+import sys
 from pathlib import Path
+
+# Configure root logger FIRST so all log.info/warning/error goes to stdout.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
 
 import uvicorn
 from dotenv import load_dotenv

@@ -282,10 +282,12 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
     base, key = worker_cfg()
     if not base:
         log.warning("worker_get: relay NOT configured (base=None)")
+        print("[yt-app] worker_get: relay NOT configured (base=None)", flush=True)
         raise ValueError("relay not configured")
     qs = urllib.parse.urlencode({"key": key, **params})
     url = f"{base}{path}?{qs}"
     log.info("worker_get: calling %s (timeout=%d, retries=%d)", path, timeout, retries)
+    print(f"[yt-app] worker_get: calling {path} (timeout={timeout}, retries={retries})", flush=True)
     last_exc = None
     last_detail = ""
     for attempt in range(1 + retries):
@@ -296,6 +298,7 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
             ) as r:
                 data = json.load(r)
             log.info("worker_get: %s OK (attempt %d)", path, attempt + 1)
+            print(f"[yt-app] worker_get: {path} OK (attempt {attempt + 1})", flush=True)
             return data
         except Exception as e:
             last_exc = e
@@ -317,6 +320,10 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
             log.warning(
                 "worker_get: %s attempt %d FAILED http=%s detail=%s",
                 path, attempt + 1, http_code, detail[:200] if detail else type(e).__name__,
+            )
+            print(
+                f"[yt-app] worker_get: {path} attempt {attempt + 1} FAILED http={http_code} detail={detail[:200] if detail else type(e).__name__}",
+                flush=True,
             )
             if http_code == 502 and attempt < retries:
                 log.info("worker_get: %s 502, retrying in 1.5s...", path)

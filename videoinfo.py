@@ -29,7 +29,9 @@ def get_video_info(video_url: str) -> dict:
         {"id": str, "title": str, "thumbnail": str, "duration": int|None,
          "uploader": str|None, "url": str}
     """
-    log.info("video-info START url=%s relay=%s", video_url, bool(worker_cfg()[0]))
+    relay_on = bool(worker_cfg()[0])
+    log.info("video-info START url=%s relay=%s", video_url, relay_on)
+    print(f"[yt-app] video-info START url={video_url} relay={relay_on}", flush=True)
     ydl_opts = base_opts({"skip_download": True, "noplaylist": True})
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -37,19 +39,25 @@ def get_video_info(video_url: str) -> dict:
     except Exception as e:
         err_msg = str(e)
         bot = is_bot_check(e)
-        relay_url = worker_cfg()[0]
         log.warning(
             "video-info yt-dlp FAILED bot_check=%s relay_configured=%s err=%s",
-            bot, bool(relay_url), err_msg[:200],
+            bot, relay_on, err_msg[:200],
         )
-        if bot and relay_url:
+        print(
+            f"[yt-app] video-info yt-dlp FAILED bot_check={bot} relay={relay_on} err={err_msg[:200]}",
+            flush=True,
+        )
+        if bot and relay_on:
             log.info("video-info bot-checked, trying relay for url=%s", video_url)
+            print(f"[yt-app] video-info trying relay for {video_url}", flush=True)
             try:
                 result = worker_video_info(video_url)
                 log.info("video-info relay OK title=%s", result.get("title", "?"))
+                print(f"[yt-app] video-info relay OK title={result.get('title', '?')}", flush=True)
                 return result
             except Exception as relay_err:
                 log.error("video-info relay FAILED: %s", relay_err)
+                print(f"[yt-app] video-info relay FAILED: {relay_err}", flush=True)
         raise friendly_error(e, "Could not read video") from e
 
     if not info:
@@ -59,6 +67,7 @@ def get_video_info(video_url: str) -> dict:
 
     video_id = info.get("id", "")
     log.info("video-info OK via yt-dlp title=%s", info.get("title", "?"))
+    print(f"[yt-app] video-info OK via yt-dlp title={info.get('title', '?')}", flush=True)
     return {
         "id": video_id,
         "title": info.get("title", ""),
