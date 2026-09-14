@@ -270,7 +270,7 @@ def worker_cfg() -> tuple[str | None, str | None]:
     return (base, key) if base and key else (None, None)
 
 
-def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 1) -> dict:
+def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> dict:
     """GET a JSON route from the relay. Raises ValueError on any failure.
 
     Retries once on HTTP 502 (transient Cloudflare/YouTube flapping)
