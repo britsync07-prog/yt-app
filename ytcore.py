@@ -364,7 +364,7 @@ def worker_download(
     media_format: str,
     dest: str | Path,
     timeout: int = 600,
-) -> str:
+) -> tuple[str, str | None]:
     """Download a video's media bytes through the Worker's combined route.
 
     googlevideo stream URLs are signed to the IP that extracted them. A
@@ -375,8 +375,8 @@ def worker_download(
     back. This function generates a content-bound PO token locally, sends it
     along, and writes the returned media to `dest`.
 
-    Returns the Content-Type reported by the Worker so the caller can decide
-    whether extraction/conversion is needed.
+    Returns (Content-Type, suggested_filename) so the caller can pick the
+    right extension and name (Content-Disposition carries the real title).
     """
     import json
     import urllib.error
@@ -417,6 +417,11 @@ def worker_download(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             ctype = r.headers.get("Content-Type") or "application/octet-stream"
+            disp = r.headers.get("Content-Disposition") or ""
+            filename = None
+            m = __import__("re").search(r'filename="?([^";]+)"?', disp)
+            if m:
+                filename = m.group(1).strip()
             dest = Path(dest)
             with open(dest, "wb") as f:
                 while True:
@@ -429,7 +434,7 @@ def worker_download(
                 f"[yt-app] worker_download: OK ctype={ctype} bytes={dest.stat().st_size}",
                 flush=True,
             )
-            return ctype
+            return ctype, filename
     except urllib.error.HTTPError as e:
         detail = ""
         try:

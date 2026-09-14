@@ -141,27 +141,32 @@ def download_via_worker_streams(
 ) -> Path:
     """Fallback path: media bytes fetched through the Worker.
 
-    Used when yt-dlp itself is bot-checked. googlevideo stream URLs are
-    IP-locked to the Cloudflare colo that minted them, so the Worker must
-    mint AND fetch the stream in one invocation. Its /download route does
-    exactly that; the bytes stream back and we optionally convert with
-    ffmpeg (audio-only stream -> mp3, progressive-mp4 fallback -> mp3).
+    Used when yt-dlp itself is bot-checked. The Worker's /download route
+    mints the player response AND fetches the chosen stream in the same
+    invocation (same Cloudflare egress IP), avoiding googlevideo's IP-lock.
+    We do NOT call worker_video_info separately — the /download route already
+    calls videoInfo() internally and returns Content-Disposition with the
+    title. A separate metadata call is both redundant and a failure point.
     """
-    from ytcore import worker_download, worker_video_info
+    from ytcore import worker_download, _video_id_from_url
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    info = worker_video_info(url)
-    name = _safe_name(info.get("title", ""), info.get("id", ""))
+    vid = _video_id_from_url(url) or "video"
 
     if media_format == "video":
-        dest = output_dir / f"{name}.mp4"
-        worker_download(url, "video", dest)
+        dest = output_dir / f"{vid}.mp4"
+        ctype, fname = worker_download(url, "video", dest)
+        if fname:
+            pretty = output_dir / fname
+            dest.replace(pretty)
+            dest = pretty
         return dest
 
     # audio: let the Worker fetch bytes, then decide conversion by mime.
-    raw = output_dir / f"{name}.raw"
-    ctype = worker_download(url, "audio", raw)
+    raw = output_dir / f"{vid}.raw"
+    ctype, fname = worker_download(url, "audio", raw)
+    stem = (Path(fname).stem if fname else "audio")
     if ctype.startswith("video/"):
         # No audio-only stream: worker fell back to a progressive mp4.
         if not _ffmpeg_exe():
@@ -170,17 +175,17 @@ def download_via_worker_streams(
                 "Audio is only available inside the video stream and "
                 "ffmpeg is not installed to extract it."
             )
-        out = output_dir / f"{name}.mp3"
+        out = output_dir / f"{stem}.mp3"
         _run_ffmpeg(["-i", str(raw), "-vn", "-b:a", "192k", str(out)])
         raw.unlink(missing_ok=True)
         return out
     # True audio-only stream (m4a/webm/opus). Convert to mp3 if ffmpeg exists.
     ext = ".mp4" if "mp4" in ctype else ".m4a"
-    src = output_dir / f"{name}{ext}"
+    src = output_dir / f"{stem}{ext}"
     raw.replace(src)
     if not _ffmpeg_exe():
         return src
-    out = output_dir / f"{name}.mp3"
+    out = output_dir / f"{stem}.mp3"
     _run_ffmpeg(["-i", str(src), "-vn", "-b:a", "192k", str(out)])
     src.unlink(missing_ok=True)
     return out
