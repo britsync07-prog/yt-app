@@ -54,6 +54,16 @@ const CLIENTS = [
     },
     ua: 'com.google.ios.youtube/21.26.3 (iPhone14,3; U; CPU iOS 17_0 like Mac OS X)',
   },
+  {
+    name: 'MWEB',
+    context: {
+      clientName: 'MWEB',
+      clientVersion: '2.20260101.00.00',
+      hl: 'en',
+      gl: 'US',
+    },
+    ua: 'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  },
 ];
 
 const CORS = {
