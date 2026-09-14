@@ -44,3 +44,31 @@ def debug_video_test(
         result["traceback"] = traceback.format_exc()
         log.error("debug/video-test FAILED: %s", e)
     return result
+
+
+@router.get("/debug/pot-test")
+def debug_pot_test(_auth=Depends(require_auth)):
+    """Probe the PO-token sidecar server and return status + sample token."""
+    import json
+    import urllib.request
+    from ytcore import POT_SERVER_URL
+
+    result = {"sidecar_url": POT_SERVER_URL}
+    try:
+        with urllib.request.urlopen(POT_SERVER_URL + "/ping", timeout=5) as r:
+            result["ping"] = r.read().decode()[:200]
+    except Exception as e:
+        result["ping_error"] = str(e)
+    try:
+        req = urllib.request.Request(
+            POT_SERVER_URL + "/generate",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=b'{}',
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = r.read().decode()[:1000]
+            result["generate"] = body
+    except Exception as e:
+        result["generate_error"] = str(e)[:300]
+    return result
