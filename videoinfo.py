@@ -3,6 +3,8 @@
 Usage as API (wired into main.py):
     GET /video-info?url=<video_url>
 """
+import logging
+
 import yt_dlp
 from fastapi import APIRouter, HTTPException, Query
 
@@ -15,6 +17,8 @@ from ytcore import (
     worker_video_info,
 )
 
+log = logging.getLogger("yt-app")
+
 router = APIRouter()
 
 
@@ -25,20 +29,27 @@ def get_video_info(video_url: str) -> dict:
         {"id": str, "title": str, "thumbnail": str, "duration": int|None,
          "uploader": str|None, "url": str}
     """
+    log.info("video-info START url=%s relay=%s", video_url, bool(worker_cfg()[0]))
     ydl_opts = base_opts({"skip_download": True, "noplaylist": True})
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
     except Exception as e:
-        if is_bot_check(e) and worker_cfg()[0]:
-            import logging
-
-            log = logging.getLogger("yt-app")
-            log.info("video-info bot-checked, trying relay")
+        err_msg = str(e)
+        bot = is_bot_check(e)
+        relay_url = worker_cfg()[0]
+        log.warning(
+            "video-info yt-dlp FAILED bot_check=%s relay_configured=%s err=%s",
+            bot, bool(relay_url), err_msg[:200],
+        )
+        if bot and relay_url:
+            log.info("video-info bot-checked, trying relay for url=%s", video_url)
             try:
-                return worker_video_info(video_url)
+                result = worker_video_info(video_url)
+                log.info("video-info relay OK title=%s", result.get("title", "?"))
+                return result
             except Exception as relay_err:
-                log.warning("video-info relay also failed: %s", relay_err)
+                log.error("video-info relay FAILED: %s", relay_err)
         raise friendly_error(e, "Could not read video") from e
 
     if not info:
@@ -47,6 +58,7 @@ def get_video_info(video_url: str) -> dict:
         raise ValueError("That URL is a playlist - use the Playlist tab instead.")
 
     video_id = info.get("id", "")
+    log.info("video-info OK via yt-dlp title=%s", info.get("title", "?"))
     return {
         "id": video_id,
         "title": info.get("title", ""),

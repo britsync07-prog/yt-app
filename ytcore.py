@@ -271,11 +271,7 @@ def worker_cfg() -> tuple[str | None, str | None]:
 
 
 def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> dict:
-    """GET a JSON route from the relay. Raises ValueError on any failure.
-
-    Retries once on HTTP 502 (transient Cloudflare/YouTube flapping)
-    after a 1.5s pause, to absorb brief egress IP cycling.
-    """
+    """GET a JSON route from the relay. Raises ValueError on any failure."""
     import json
     import logging
     import time
@@ -285,9 +281,11 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
     log = logging.getLogger("yt-app")
     base, key = worker_cfg()
     if not base:
+        log.warning("worker_get: relay NOT configured (base=None)")
         raise ValueError("relay not configured")
     qs = urllib.parse.urlencode({"key": key, **params})
     url = f"{base}{path}?{qs}"
+    log.info("worker_get: calling %s (timeout=%d, retries=%d)", path, timeout, retries)
     last_exc = None
     last_detail = ""
     for attempt in range(1 + retries):
@@ -297,7 +295,7 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
                 timeout=timeout,
             ) as r:
                 data = json.load(r)
-            log.info("relay %s ok%s", path, "" if attempt == 0 else f" (attempt {attempt + 1})")
+            log.info("worker_get: %s OK (attempt %d)", path, attempt + 1)
             return data
         except Exception as e:
             last_exc = e
@@ -305,18 +303,27 @@ def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 2) -> 
             http_code = None
             try:
                 import urllib.error
+
                 if isinstance(e, urllib.error.HTTPError):
                     http_code = e.code
-                    detail = json.load(e).get("detail", "")
+                    body = e.read().decode("utf-8", errors="replace")
+                    try:
+                        detail = json.loads(body).get("detail", "")
+                    except Exception:
+                        detail = body[:200]
                     last_detail = detail
             except Exception:
                 pass
+            log.warning(
+                "worker_get: %s attempt %d FAILED http=%s detail=%s",
+                path, attempt + 1, http_code, detail[:200] if detail else type(e).__name__,
+            )
             if http_code == 502 and attempt < retries:
-                log.info("relay %s 502, retrying in 1.5s...", path)
+                log.info("worker_get: %s 502, retrying in 1.5s...", path)
                 time.sleep(1.5)
                 continue
             break
-    log.warning("relay %s failed: %s", path, last_detail or type(last_exc).__name__)
+    log.warning("worker_get: %s ALL ATTEMPTS FAILED: %s", path, last_detail or type(last_exc).__name__)
     raise ValueError(last_detail or f"relay error: {type(last_exc).__name__}")
 
 
