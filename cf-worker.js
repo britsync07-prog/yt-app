@@ -14,28 +14,57 @@
  *
  * Routes (all require ?key=<WORKER_KEY>):
  *   GET /health
- *   GET /video?id=<youtubeId>       -> {id,title,uploader,duration,thumbnail,url}
+ *   GET /video?id=<youtubeId>       -> {id,title,uploader,duration,thumbnail,url,streams[]}
  *   GET /playlist?id=<playlistId>   -> {playlist_title,count,videos[]}
  */
 const INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-const ANDROID_CLIENT = {
-  clientName: 'ANDROID',
-  clientVersion: '21.26.364',
-  androidSdkVersion: 30,
-  osName: 'Android',
-  osVersion: '11',
-  hl: 'en',
-  gl: 'US',
-};
-const ANDROID_UA = 'com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip';
-const WEB_CLIENT = {
-  clientName: 'WEB',
-  clientVersion: '2.20260101.00.00',
-  hl: 'en',
-  gl: 'US',
-};
-const WEB_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+
+const CLIENTS = [
+  {
+    name: 'ANDROID',
+    context: {
+      clientName: 'ANDROID',
+      clientVersion: '21.26.364',
+      androidSdkVersion: 30,
+      osName: 'Android',
+      osVersion: '11',
+      hl: 'en',
+      gl: 'US',
+    },
+    ua: 'com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip',
+  },
+  {
+    name: 'WEB',
+    context: {
+      clientName: 'WEB',
+      clientVersion: '2.20260101.00.00',
+      hl: 'en',
+      gl: 'US',
+    },
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+  },
+  {
+    name: 'IOS',
+    context: {
+      clientName: 'IOS',
+      clientVersion: '21.26.3',
+      deviceModel: 'iPhone14,3',
+      hl: 'en',
+      gl: 'US',
+    },
+    ua: 'com.google.ios.youtube/21.26.3 (iPhone14,3; U; CPU iOS 17_0 like Mac OS X)',
+  },
+  {
+    name: 'TV',
+    context: {
+      clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+      clientVersion: '2.0',
+      hl: 'en',
+      gl: 'US',
+    },
+    ua: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/21.lts.4.30201',
+  },
+];
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -55,10 +84,7 @@ async function innertube(endpoint, body, ua) {
     `https://www.youtube.com/youtubei/v1/${endpoint}?key=${INNERTUBE_KEY}&prettyPrint=false`,
     {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': ua,
-      },
+      headers: { 'Content-Type': 'application/json', 'User-Agent': ua },
       body: JSON.stringify(body),
     }
   );
@@ -118,35 +144,44 @@ function headerTitle(data) {
   return '';
 }
 
+/**
+ * Fetch video info via player endpoint, trying each client until one works.
+ * YouTube challenges certain clients per-IP, so fallback is critical.
+ */
 async function videoInfo(id) {
-  const data = await innertube(
-    'player',
-    { videoId: id, context: { client: ANDROID_CLIENT } },
-    ANDROID_UA
-  );
-  const status = data.playabilityStatus || {};
-  if (status.status && status.status !== 'OK') {
-    throw new Error(status.reason || `video not playable (${status.status})`);
+  let lastErr = null;
+  for (const c of CLIENTS) {
+    try {
+      const data = await innertube('player', { videoId: id, context: { client: c.context } }, c.ua);
+      const status = data.playabilityStatus || {};
+      if (status.status && status.status !== 'OK') {
+        lastErr = `${c.name}: ${status.reason || status.status}`;
+        continue;
+      }
+      const vd = data.videoDetails || {};
+      const sd = data.streamingData || {};
+      const streams = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
+        .filter((s) => s.url)
+        .map((s) => ({
+          url: s.url,
+          mime: (s.mimeType || '').split(';')[0],
+          quality: s.qualityLabel || s.quality || '',
+          size: s.contentLength ? +s.contentLength : null,
+        }));
+      return {
+        id: vd.videoId || id,
+        title: vd.title || '',
+        uploader: vd.author || '',
+        duration: vd.lengthSeconds ? +vd.lengthSeconds : null,
+        thumbnail: bestThumb(vd.thumbnail && vd.thumbnail.thumbnails),
+        url: `https://www.youtube.com/watch?v=${id}`,
+        streams,
+      };
+    } catch (e) {
+      lastErr = `${c.name}: ${e.message || e}`;
+    }
   }
-  const vd = data.videoDetails || {};
-  const sd = data.streamingData || {};
-  const streams = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
-    .filter((s) => s.url)
-    .map((s) => ({
-      url: s.url,
-      mime: (s.mimeType || '').split(';')[0],
-      quality: s.qualityLabel || s.quality || '',
-      size: s.contentLength ? +s.contentLength : null,
-    }));
-  return {
-    id: vd.videoId || id,
-    title: vd.title || '',
-    uploader: vd.author || '',
-    duration: vd.lengthSeconds ? +vd.lengthSeconds : null,
-    thumbnail: bestThumb(vd.thumbnail && vd.thumbnail.thumbnails),
-    url: `https://www.youtube.com/watch?v=${id}`,
-    streams,
-  };
+  throw new Error(`All player clients failed: ${lastErr}`);
 }
 
 function parsePlaylistPage(data, first) {
@@ -164,7 +199,6 @@ function parsePlaylistPage(data, first) {
   let continuation = null;
   for (const c of items || []) {
     if (c.lockupViewModel && c.lockupViewModel.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
-      // New YouTube layout.
       const lk = c.lockupViewModel;
       const md = (lk.metadata && lk.metadata.lockupMetadataViewModel) || {};
       const vid = lk.contentId || '';
@@ -177,7 +211,6 @@ function parsePlaylistPage(data, first) {
         duration: lockupDuration(lk),
       });
     } else if (c.playlistVideoRenderer) {
-      // Classic layout.
       const p = c.playlistVideoRenderer;
       videos.push({
         id: p.videoId,
@@ -195,8 +228,8 @@ function parsePlaylistPage(data, first) {
 }
 
 async function playlistInfo(id) {
-  const ctx = { client: WEB_CLIENT };
-  let data = await innertube('browse', { browseId: 'VL' + id, context: ctx }, WEB_UA);
+  const ctx = { client: CLIENTS[1].context }; // WEB
+  let data = await innertube('browse', { browseId: 'VL' + id, context: ctx }, CLIENTS[1].ua);
   let title = '';
   const videos = [];
   for (let page = 0; page < 10; page++) {
@@ -204,7 +237,7 @@ async function playlistInfo(id) {
     if (page === 0) title = parsed.title;
     videos.push(...parsed.videos);
     if (!parsed.continuation) break;
-    data = await innertube('browse', { continuation: parsed.continuation, context: ctx }, WEB_UA);
+    data = await innertube('browse', { continuation: parsed.continuation, context: ctx }, CLIENTS[1].ua);
   }
   return {
     playlist_title: title,

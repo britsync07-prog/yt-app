@@ -270,10 +270,15 @@ def worker_cfg() -> tuple[str | None, str | None]:
     return (base, key) if base and key else (None, None)
 
 
-def worker_get(path: str, params: dict, timeout: int = 45) -> dict:
-    """GET a JSON route from the relay. Raises ValueError on any failure."""
+def worker_get(path: str, params: dict, timeout: int = 45, retries: int = 1) -> dict:
+    """GET a JSON route from the relay. Raises ValueError on any failure.
+
+    Retries once on HTTP 502 (transient Cloudflare/YouTube flapping)
+    after a 1.5s pause, to absorb brief egress IP cycling.
+    """
     import json
     import logging
+    import time
     import urllib.parse
     import urllib.request
 
@@ -282,26 +287,37 @@ def worker_get(path: str, params: dict, timeout: int = 45) -> dict:
     if not base:
         raise ValueError("relay not configured")
     qs = urllib.parse.urlencode({"key": key, **params})
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(f"{base}{path}?{qs}", headers={"User-Agent": "yt-app"}),
-            timeout=timeout,
-        ) as r:
-            data = json.load(r)
-        log.info("relay %s ok", path)
-        return data
-    except Exception as e:
-        detail = ""
+    url = f"{base}{path}?{qs}"
+    last_exc = None
+    last_detail = ""
+    for attempt in range(1 + retries):
         try:
-            import urllib.error
-
-            if isinstance(e, urllib.error.HTTPError):
-                detail = json.load(e).get("detail", "")
-        except Exception:
-            pass
-        # Never log the key (it travels in the query string).
-        log.warning("relay %s failed: %s", path, detail or type(e).__name__)
-        raise ValueError(detail or f"relay error: {type(e).__name__}")
+            with urllib.request.urlopen(
+                urllib.request.Request(url, headers={"User-Agent": "yt-app"}),
+                timeout=timeout,
+            ) as r:
+                data = json.load(r)
+            log.info("relay %s ok%s", path, "" if attempt == 0 else f" (attempt {attempt + 1})")
+            return data
+        except Exception as e:
+            last_exc = e
+            detail = ""
+            http_code = None
+            try:
+                import urllib.error
+                if isinstance(e, urllib.error.HTTPError):
+                    http_code = e.code
+                    detail = json.load(e).get("detail", "")
+                    last_detail = detail
+            except Exception:
+                pass
+            if http_code == 502 and attempt < retries:
+                log.info("relay %s 502, retrying in 1.5s...", path)
+                time.sleep(1.5)
+                continue
+            break
+    log.warning("relay %s failed: %s", path, last_detail or type(last_exc).__name__)
+    raise ValueError(last_detail or f"relay error: {type(last_exc).__name__}")
 
 
 def worker_video_info(video_url: str) -> dict:
