@@ -80,11 +80,12 @@ def get_playlist_videos(playlist_url: str) -> dict:
         if last_error and is_bot_check(last_error) and worker_cfg()[0]:
             import logging
 
-            logging.getLogger("yt-app").info("playlist bot-checked, trying relay")
+            log = logging.getLogger("yt-app")
+            log.info("playlist bot-checked, trying relay")
             try:
                 return worker_playlist_videos(playlist_url)
-            except Exception:
-                pass
+            except Exception as relay_err:
+                log.warning("playlist relay also failed: %s", relay_err)
         raise friendly_error(last_error or Exception("empty response"), "Could not read playlist")
 
     # If a single video URL was passed instead of a playlist, wrap it.

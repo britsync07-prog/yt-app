@@ -33,11 +33,12 @@ def get_video_info(video_url: str) -> dict:
         if is_bot_check(e) and worker_cfg()[0]:
             import logging
 
-            logging.getLogger("yt-app").info("video-info bot-checked, trying relay")
+            log = logging.getLogger("yt-app")
+            log.info("video-info bot-checked, trying relay")
             try:
                 return worker_video_info(video_url)
-            except Exception:
-                pass
+            except Exception as relay_err:
+                log.warning("video-info relay also failed: %s", relay_err)
         raise friendly_error(e, "Could not read video") from e
 
     if not info:
