@@ -49,6 +49,7 @@ def debug_video_test(
 @router.get("/debug/pot-test")
 def debug_pot_test(
     vid: str = "09Urt8CSQAA",
+    full: int = 0,
     _auth=Depends(require_auth),
 ):
     """Probe the PO-token sidecar server and return a sample token."""
@@ -74,6 +75,9 @@ def debug_pot_test(
             result["po_token"] = (body.get("poToken") or "")[:40] + "..."
             result["content_binding"] = body.get("contentBinding")
             result["visitor_data"] = (body.get("visitorData") or "")[:40] + "..."
+            if full:
+                result["po_token_full"] = body.get("poToken")
+                result["visitor_data_full"] = body.get("visitorData")
     except Exception as e:
         result["generate_error"] = str(e)[:300]
     return result
