@@ -126,8 +126,24 @@ def _safe_name(title: str, video_id: str) -> str:
 
 
 def _fetch_stream(url: str, dest: Path) -> Path:
-    """Download a (signed) media URL the way a browser would."""
+    """Download a (signed) media URL the way a browser would.
+
+    When a relay is configured, stream URLs come back IP-locked to the
+    Cloudflare worker, so the actual bytes must be proxied through its
+    /stream route (only it can fetch googlevideo from the bound IP).
+    """
     import urllib.request
+
+    from ytcore import worker_cfg
+
+    relay_base, relay_key = worker_cfg()
+    if relay_base and url.startswith("http"):
+        import urllib.parse
+
+        proxy_url = (
+            f"{relay_base}/stream?key={relay_key}&url={urllib.parse.quote(url, safe='')}"
+        )
+        url = proxy_url
 
     req = urllib.request.Request(
         url,
@@ -277,11 +293,16 @@ def download_youtube(
         if is_bot_check(e) and worker_cfg()[0]:
             import logging
 
-            logging.getLogger("yt-app").info("download bot-checked, trying relay streams")
+            log = logging.getLogger("yt-app")
+            log.info("download bot-checked, trying relay streams")
+            print("[yt-app] download bot-checked, trying relay streams", flush=True)
             try:
-                return download_via_worker_streams(url, media_format, output_dir)
-            except Exception:
-                pass
+                result = download_via_worker_streams(url, media_format, output_dir)
+                print(f"[yt-app] download via relay OK: {result}", flush=True)
+                return result
+            except Exception as relay_err:
+                log.error("download via relay FAILED: %s", relay_err)
+                print(f"[yt-app] download via relay FAILED: {relay_err}", flush=True)
         raise friendly_error(e, "Download failed") from e
 
     after = set(output_dir.glob("*"))

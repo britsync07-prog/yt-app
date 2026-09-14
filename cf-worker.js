@@ -282,6 +282,32 @@ export default {
         if (!id) return json({ detail: 'Missing ?id=' }, 400);
         return json(await playlistInfo(id));
       }
+      if (url.pathname === '/stream') {
+        const target = url.searchParams.get('url') || '';
+        if (!target) return json({ detail: 'Missing ?url=' }, 400);
+        // Stream a googlevideo media URL. The stream URLs from our /video
+        // endpoint are IP-locked to Cloudflare, so the backend cannot fetch
+        // them directly - only this Worker (same egress IP) can. We relay
+        // the raw bytes back with a streaming response.
+        const mediaRes = await fetch(target, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+            Referer: 'https://www.youtube.com/',
+          },
+        });
+        if (!mediaRes.ok && !mediaRes.body) {
+          return json({ detail: `media fetch failed: ${mediaRes.status}` }, 502);
+        }
+        return new Response(mediaRes.body, {
+          status: mediaRes.status,
+          headers: {
+            'Content-Type': mediaRes.headers.get('Content-Type') || 'application/octet-stream',
+            'Content-Length': mediaRes.headers.get('Content-Length') || '',
+            ...CORS,
+          },
+        });
+      }
       return json({ detail: 'Unknown route.' }, 404);
     } catch (e) {
       return json({ detail: String((e && e.message) || e) }, 502);
