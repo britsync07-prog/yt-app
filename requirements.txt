@@ -1,6 +1,8 @@
 fastapi>=0.115
 uvicorn>=0.30
 yt-dlp>=2026.8.1
+yt-dlp-ejs>=0.8.0
 python-dotenv>=1.0
 pyjwt>=2.8
 imageio-ffmpeg>=0.5
+static-ffmpeg>=3.0

@@ -36,7 +36,11 @@ POT_ASSETS = {
 POT_SERVER_URL = os.environ.get("POT_SERVER_URL", "http://localhost:4416")
 POT_PORT = 4416
 
-PLAYER_CLIENTS = ["android", "ios", "tv", "mweb", "web_embedded", "web"]
+# yt-dlp-rescue / yttranscript consensus: the default web/android/ios
+# clients are what YouTube bot-checks (SABR + "Sign in to confirm").
+# android_vr / tv_downgraded / web_embedded / web_creator deliver full DASH
+# and are far less throttled, WITHOUT needing PO tokens.
+PLAYER_CLIENTS = ["android_vr", "tv_downgraded", "web_embedded", "web_creator", "mweb", "web"]
 
 _COOKIE_TMP: str | None = None
 _COOKIE_CHECKED = False
@@ -204,6 +208,13 @@ def base_opts(extra: dict | None = None) -> dict:
         "quiet": True,
         "no_warnings": True,
         "js_runtimes": {"node": {}},
+        # EJS: solves YouTube's signature + n challenges. Without this every
+        # client degrades to "images only"/bot-check. remote_components fetches
+        # the solver from GitHub (yttranscript fix); bundled yt-dlp-ejs is used
+        # first when installed.
+        "remote_components": ["ejs:github"],
+        # Avoid IPv6 routing issues on cloud servers (yt-dlp-rescue fix).
+        "force_ipv4": True,
         # Try mobile API clients before web - they trip bot checks rarely.
         # youtubepot-bgutilhttp feeds PO tokens from the sidecar server
         # when it is running; youtubepot-bgutilcli uses the binary
@@ -211,10 +222,14 @@ def base_opts(extra: dict | None = None) -> dict:
         # NOTE: these must be TOP-LEVEL extractor_args keys,
         # not nested under "youtube".
         "extractor_args": {
-            "youtube": {"player_client": PLAYER_CLIENTS},
-            "youtubepot-bgutilhttp": {"base_url": POT_SERVER_URL},
+            "youtube": {
+                "player_client": PLAYER_CLIENTS,
+                # Skip the webpage request - fewer HTTP calls, less rate limiting.
+                "player_skip": ["webpage"],
+            },
+            "youtubepot-bgutilhttp": {"base_url": [POT_SERVER_URL]},
             **(
-                {"youtubepot-bgutilcli": {"cli_path": pot_binary()}}
+                {"youtubepot-bgutilcli": {"cli_path": [pot_binary()]}}
                 if pot_binary()
                 else {}
             ),

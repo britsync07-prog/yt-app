@@ -33,8 +33,22 @@ DEFAULT_OUTPUT_DIR = BASE_DIR / "downloads"
 VALID_FORMATS = ("video", "audio")
 
 
+_STATIC_FFMPEG_TRIED = False
+
+
 def _ffmpeg_exe() -> str | None:
-    """Path to an ffmpeg binary: system ffmpeg or imageio-ffmpeg bundle."""
+    """Path to an ffmpeg binary: static ffmpeg+ffprobe, system ffmpeg, or
+    the imageio-ffmpeg bundle. static_ffmpeg wins because it ships both
+    ffmpeg AND ffprobe (video merge needs ffprobe)."""
+    global _STATIC_FFMPEG_TRIED
+    if not _STATIC_FFMPEG_TRIED:
+        _STATIC_FFMPEG_TRIED = True
+        try:
+            import static_ffmpeg
+
+            static_ffmpeg.add_paths()
+        except Exception:
+            pass
     p = shutil.which("ffmpeg")
     if p:
         return p
@@ -46,6 +60,18 @@ def _ffmpeg_exe() -> str | None:
             return exe
     except ImportError:
         pass
+    return None
+
+
+def _ffmpeg_dir() -> str | None:
+    """Directory that holds BOTH ffmpeg and ffprobe, or None. yt-dlp's
+    ffmpeg_location accepts a directory and locates ffprobe alongside."""
+    exe = _ffmpeg_exe()
+    if not exe:
+        return None
+    d = str(Path(exe).resolve().parent)
+    if Path(d, "ffprobe").exists() or Path(d, "ffprobe.exe").exists():
+        return d
     return None
 
 
@@ -62,11 +88,11 @@ def build_opts(media_format: str, output_dir: Path) -> dict:
     # Small pause before each download so bursts look less bot-like.
     base["sleep_interval"] = 2
     base["max_sleep_interval"] = 5
+    ffmpeg_dir = _ffmpeg_dir()
     ffmpeg_exe = _ffmpeg_exe()
-    if ffmpeg_exe:
-        # Full path to binary (imageio-ffmpeg names it differently
-        # than ffmpeg.exe, so pass the exe itself, not its folder).
-        base["ffmpeg_location"] = ffmpeg_exe
+    if ffmpeg_dir:
+        # Directory holding both ffmpeg and ffprobe: yt-dlp merger + probe work.
+        base["ffmpeg_location"] = ffmpeg_dir
 
     if media_format == "audio":
         if ffmpeg_exe:
@@ -96,7 +122,8 @@ def build_opts(media_format: str, output_dir: Path) -> dict:
         }
 
     # video
-    if ffmpeg_exe:
+    if ffmpeg_dir:
+        # ffmpeg + ffprobe both present: merge best video+audio to mp4.
         return {
             **base,
             "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -106,8 +133,8 @@ def build_opts(media_format: str, output_dir: Path) -> dict:
             "noplaylist": True,
             "merge_output_format": "mp4",
         }
-    # No ffmpeg: progressive mp4 only (single file with audio+video,
-    # usually up to 360p/720p). Install ffmpeg for best quality.
+    # No ffprobe/merge: progressive mp4 only (single file with audio+video,
+    # usually up to 360p/720p). Install static-ffmpeg for best quality.
     return {
         **base,
         "format": "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",

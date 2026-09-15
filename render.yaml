@@ -2,7 +2,7 @@ services:
   - type: web
     name: yt-app-backend
     runtime: python
-    buildCommand: pip install -r requirements.txt && curl -fsSL -o bgutil-pot https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-linux-x86_64 && chmod +x bgutil-pot && curl -fsSL -o pot-plugin.zip https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip && mkdir -p yt_plugins && python -c "import zipfile; zipfile.ZipFile('pot-plugin.zip').extractall('yt_plugins')" && rm pot-plugin.zip
+    buildCommand: pip install -r requirements.txt && python -c "import static_ffmpeg, site, os, pathlib; static_ffmpeg.add_paths(); base = pathlib.Path(list(site.getsitepackages())[0]); print('cached ffmpeg at', sorted((base / 'static_ffmpeg' / 'bin').rglob('ffmpeg*')))" && curl -fsSL -o bgutil-pot https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-linux-x86_64 && chmod +x bgutil-pot && curl -fsSL -o pot-plugin.zip https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip && mkdir -p yt_plugins && python -c "import zipfile; zipfile.ZipFile('pot-plugin.zip').extractall('yt_plugins')" && rm pot-plugin.zip
     startCommand: bash start.sh
     envVars:
       - key: JWT_SECRET
