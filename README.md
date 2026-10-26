@@ -20,3 +20,10 @@ Open http://localhost:4444
 
 - Backend → Render (see `render.yaml`), env vars: `JWT_SECRET`, `ACCESS_KEY`, `FRONTEND_URL`, `JWT_EXPIRE_MINUTES`
 - Frontend → Cloudflare Pages, build `node frontend/build-config.js`, output `frontend/`, env vars: `API_BASE_URL`, `ACCESS_KEY`
+
+## Contact
+
+- 📧 Email: [saimon@ascentraconsulting.co.uk](mailto:saimon@ascentraconsulting.co.uk)
+- 💼 LinkedIn: [Musfiqur Rahman Saimon](https://www.linkedin.com/in/musfiqur-rahman-saimon-a5994b3aa)
+- 🐙 GitHub: [@britsync07-prog](https://github.com/britsync07-prog)
+- 🌐 Portfolio: [brit-os.pages.dev](https://brit-os.pages.dev/)
